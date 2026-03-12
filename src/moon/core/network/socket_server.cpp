@@ -580,9 +580,12 @@ void socket_server::add_connection(
     c->start(true);
 
     if (sessionid != 0) {
-      asio::dispatch(from->context_, [from, ctx, sessionid, fd = c->fd()] {
-        from->handle_message(ctx->owner, message{PTYPE_INTEGER, 0, 0, sessionid, fd});
-      });
+      asio::dispatch(
+        from->context_,
+        [from, ctx, sessionid, fd = c->fd()] { // Dispatch the message to the parent context, 分发消息到父上下文
+          from->handle_message(ctx->owner, message{PTYPE_INTEGER, 0, 0, sessionid, fd});
+        }
+      );
     }
   });
 }

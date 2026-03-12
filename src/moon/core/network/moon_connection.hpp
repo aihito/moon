@@ -45,9 +45,12 @@ public:
   bool send(buffer_shr_ptr_t data) override
   {
     if (data->size() >= MESSAGE_CONTINUED_FLAG && !enum_has_any_bitmask(mask_, connection_mask::chunked_send)) {
-      asio::post(socket_.get_executor(), [this, self = shared_from_this()]() {
-        error(make_error_code(moon::error::write_message_too_big));
-      });
+      asio::post(
+        socket_.get_executor(),
+        [this, self = shared_from_this()]() {
+          error(make_error_code(moon::error::write_message_too_big));
+        }
+      );
       return false;
     }
     return base_connection_t::send(std::move(data));
@@ -86,8 +89,7 @@ private:
 
           if (slice_size == MESSAGE_CONTINUED_FLAG) {
             header = 0;
-            wqueue_
-              .prepare_with_padding(&header, sizeof(header), nullptr, 0); // end flag
+            wqueue_.prepare_with_padding(&header, sizeof(header), nullptr, 0); // end flag
           }
         }
         else {

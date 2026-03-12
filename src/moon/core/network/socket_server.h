@@ -42,11 +42,11 @@ public:
       reserve.open(tcp::v4(), ec);
     }
 
-    uint8_t type;
-    uint32_t owner;
-    uint32_t fd = 0;
-    tcp::socket reserve;
-    tcp::acceptor acceptor;
+    uint8_t type;           // Connection type for accepted sockets (e.g. PTYPE_SOCKET_TCP)
+    uint32_t owner;         // Service id that owns this acceptor
+    uint32_t fd = 0;        // Logical fd id (from server_->nextfd()), used as key in acceptors_
+    tcp::socket reserve;    // Socket passed to async_accept; holds new connection until handover, then reset for next accept
+    tcp::acceptor acceptor; // Listening acceptor bound to host:port
   };
 
   static constexpr size_t addr_v4_size = 1 + sizeof(address_v4::bytes_type) + sizeof(port_type);
@@ -86,7 +86,7 @@ public:
 
   socket_server& operator=(const socket_server&) = delete;
 
-  bool try_open(const std::string& host, uint16_t port, bool is_connect = false);
+  bool try_open(const std::string& host, uint16_t port, bool is_connect = false); // Try to open a socket connection or listen for incoming connections, 探测函数
 
   std::pair<uint32_t, tcp::endpoint>
   listen(const std::string& host, uint16_t port, uint32_t owner, uint8_t type);

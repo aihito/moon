@@ -127,7 +127,7 @@ local callbacks = {}
 
 local _decode = moon.decode
 
-moon.raw_dispatch(
+moon.raw_dispatch( -- 注册消息派发函数
     "moonsocket",
     function(msg)
         local fd, sdt = _decode(msg, "SR")

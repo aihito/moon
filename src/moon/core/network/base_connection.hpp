@@ -76,9 +76,12 @@ public:
     if (wq_warn_size_ != 0 && wqueue_.writeable() >= wq_warn_size_) {
       CONSOLE_WARN("network send queue too long. size:%zu", wqueue_.writeable());
       if (wq_error_size_ != 0 && wqueue_.writeable() >= wq_error_size_) {
-        asio::post(socket_.get_executor(), [this, self = shared_from_this()]() {
-          error(make_error_code(moon::error::send_queue_too_big));
-        });
+        asio::post(
+          socket_.get_executor(),
+          [this, self = shared_from_this()]() {
+            error(make_error_code(moon::error::send_queue_too_big));
+          }
+        );
         return false;
       }
     }
