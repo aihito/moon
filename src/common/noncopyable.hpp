@@ -1,12 +1,14 @@
 #pragma once
 
-namespace moon {
-class noncopyable {
+namespace moon
+{
+class noncopyable
+{
 public:
-    noncopyable() {}
-    ~noncopyable() {}
+  noncopyable() {}
+  ~noncopyable() {}
 
-    noncopyable(const noncopyable&) = delete;
-    noncopyable& operator=(const noncopyable&) = delete;
+  noncopyable(const noncopyable&) = delete;
+  noncopyable& operator=(const noncopyable&) = delete;
 };
 } // namespace moon
