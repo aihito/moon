@@ -19,12 +19,12 @@ local function raw_example()
 
     -- lua table data
     local data = {
-    name = "ilse",
-    age  = 18,
-    contacts = {
-        { name = "alice", phonenumber = 12312341234 },
-        { name = "bob",   phonenumber = 45645674567 }
-    }
+        name = "ilse",
+        age  = 18,
+        contacts = {
+            { name = "alice", phonenumber = 12312341234 },
+            { name = "bob",   phonenumber = 45645674567 }
+        }
     }
 
     -- encode lua table data into binary format in lua string and return
