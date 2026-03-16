@@ -35,8 +35,8 @@
 
 - **游戏服**：已有逻辑；与 Moon 之间维持**一条**连接，负责上行（player_id + cmd + 参数）与下行（target + player_id(s) + data）的转发。
 - **Moon 内**（仅三个服务，无 user_proxy）：
-  - **bridge**：持有与游戏服的 fd；维护 `player_id → room_id` 路由表（由 center 在进房/退房时更新）；上行解包后 `join_match` 转 center、`room_action` 查表转 room；下行收 center/room 的 `forward` / `forward_broadcast`，编码写 fd。
-  - **center**：匹配与房间管理；“玩家”即 `{ player_id, name }`，无 fd；满人则 new room，并通知 bridge 更新路由；发给玩家一律 `moon.send(bridge, "forward", ...)`。
+  - **bridge**：持有与游戏服的 fd（可**一个 bridge 一条连接**，也可**一个 bridge 持有多条连接**做多路复用）；维护 `player_id → room_id` 及（多连接时）`player_id → fd`；上行解包后 `join_match` 转 center、`room_action` 查表转 room；下行收 center/room 的 `forward` / `forward_broadcast`，编码写 fd。bridge 数量见 §8。
+  - **center**：匹配与房间管理；“玩家”即 `{ player_id, name }`，无 fd；满人则 new room，并通知 bridge 更新路由；发给玩家一律 `moon.send(bridge, "forward", ...)`（多 bridge 时按 player_id 选 bridge_id）。
   - **room**：房间内战斗/玩法；房间内玩家即 `{ player_id, name }` 列表；广播/单发都 `moon.send(bridge, "forward_broadcast" | "forward", ...)`，由 bridge 统一发回游戏服。
 
 ---
@@ -161,9 +161,22 @@ guess_gate/
 
 ---
 
-## 8. 扩展：单节点多游戏服（多 bridge）
+## 8. 扩展：单节点多游戏服 — bridge 数量与形态
 
-当**游戏服数量多**但**单 Moon 进程仍可承受**时，可在同一节点内使用**多个 bridge**：每 `accept` 一个连接就 `new_service(bridge)` 并把 fd 交给该 bridge，**center 唯一**，维护 `player_id → bridge_id` 和 `player_id → room_id`，下行按 bridge_id 转发。
+bridge 不必「每个游戏服一个」；可按需求选：**单 bridge 多连接**、**一连接一 bridge**、或**按特定维度（如区服/类型）一个 bridge**。
+
+### 8.1 单 bridge（一个 bridge 持有多条连接）
+
+**只起一个 bridge 服务**，所有游戏服连接都由该 bridge 持有（多 fd），在 bridge 内做多路复用（如异步 read/write 或事件驱动）。
+
+- **center**：唯一，维护 `player_id → room_id`；下行时 `send(bridge_id, "forward", player_id, ...)`，只发往同一个 bridge_id。
+- **bridge**：listen 后每 `accept` 得到一个 fd，**不** new_service，而是把 fd 加入本服务的 fd 集合，内部维护 `player_id → fd`（或 connection_id → fd）；上行解包后根据 player_id 路由到 center/room；下行根据 player_id 查 fd 写回。
+
+**优点**：服务数少，center 无需维护 `player_id → bridge_id`。**注意**：单 bridge 内需自己处理多 fd 的读写与线程模型（如单 worker 多 fd 非阻塞 + 事件循环），且单点承载所有连接，连接数很大时可能成为瓶颈。
+
+### 8.2 一连接一 bridge（每服一个 bridge，默认写法）
+
+每 `accept` 一个连接就 `new_service(bridge)` 并把 fd 交给该 bridge，**center 唯一**，维护 `player_id → bridge_id` 和 `player_id → room_id`，下行按 bridge_id 转发。
 
 ```
 ┌─────────────┐                    ┌─────────────────────────────────────────────────────────┐
@@ -181,6 +194,19 @@ guess_gate/
                                    └─────────────────────────────────────────────────────────┘
 ```
 
-**要点**：listen 端口不变，每 `accept` 得到 fd 后 `moon.new_service({ name = "bridge", file = "service_bridge.lua" })` 得到新 bridge_id，再 `set_fd(fd)`；bridge 在首包或协议中上报 player_id / game_server_id，center 维护 `player_bridge[player_id] = bridge_id`；下行时 center/room 按 player_id 查 bridge_id 再 `send(bridge_id, "forward", ...)` 或按 bridge_id 分组 `forward_broadcast`。
+**优点**：契合 Moon「一 fd 一 actor」的用法，每个 bridge 只持有一个 fd，读写简单、多 worker 自然并行。**要点**：listen 端口不变，每 `accept` 得到 fd 后 `moon.new_service({ name = "bridge", file = "service_bridge.lua" })` 得到新 bridge_id，再 `set_fd(fd)`；bridge 在首包或协议中上报 player_id / game_server_id，center 维护 `player_bridge[player_id] = bridge_id`；下行时 center/room 按 player_id 查 bridge_id 再 `send(bridge_id, "forward", ...)` 或按 bridge_id 分组 `forward_broadcast`。
+
+### 8.3 按「特定服务」一个 bridge（按区服/类型分组）
+
+若希望**不是每连接一个 bridge，而是按业务维度**（如 zone_id、game_server_type）划分，则同一维度下的多台游戏服**共用一个 bridge**：该 bridge 持有多条连接（多 fd），内部维护 `player_id → fd`（或 connection_id → fd），逻辑同 §8.1。
+
+- **center**：维护 `player_id → bridge_id`（此时 bridge_id 表示「某区服/某类型」）、`player_id → room_id`；下行按 bridge_id 发，同一 bridge 内再按 player_id 选 fd。
+- **bridge**：每个 bridge 对应一个区服或类型，持有该类下所有游戏服的 fd，做多路复用；上行/下行与 §8.1 类似。
+
+这样 bridge 数量 = 区服数或类型数，而不是连接数；适合「按区服/类型」做隔离或路由、又不想为每条连接起一个服务的场景。
+
+---
+
+**小结**：bridge 可以只有一个（单 bridge 多连接，§8.1）；也可以多个，按**连接数**（一连接一 bridge，§8.2）或按**特定服务/维度**（每区服或每类型一个 bridge，§8.3）划分。示例代码通常采用 §8.2，实现最简单、与 Moon 模型一致。
 
 **多节点**（多台 Moon 水平扩展、仅本节点匹配 / 全局匹配、房间路由）见 [game_server_gate_multinode.md](game_server_gate_multinode.md)。
