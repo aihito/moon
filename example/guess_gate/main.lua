@@ -1,6 +1,6 @@
 --- Guess game extension: game server connects to Moon (one connection).
 --- No user_proxy; bridge + center + room only.
---- See docs/game_server_extension_integration.md.
+--- See docs/game_server_gate_single_node.md.
 if _G["__init__"] then
     return { thread = 4, enable_stdout = true }
 end

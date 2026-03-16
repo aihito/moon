@@ -1,6 +1,6 @@
 # Guess Game Extension (游戏服连 Moon)
 
-与 [guess_game](../guess_game/) 相同的猜数字玩法，但**客户端不直连 Moon**，而是由**游戏服**与 Moon 保持**一条 TCP 连接**，按约定协议转发上下行。对应文档：`docs/game_server_extension_integration.md`。
+与 [guess_game](../guess_game/) 相同的猜数字玩法，但**客户端不直连 Moon**，而是由**游戏服**与 Moon 保持**一条 TCP 连接**，按约定协议转发上下行。对应文档：`docs/game_server_gate_single_node.md`。多节点扩展见 `docs/game_server_gate_multinode.md`。
 
 ## 目录
 
