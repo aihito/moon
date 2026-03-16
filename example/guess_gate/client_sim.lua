@@ -1,13 +1,12 @@
---- Simulates the game server: one TCP connection to Moon, sends upstream lines and prints downstream.
---- Run: first start Moon with moon example/guess_game_extension/main_extension.lua
----       then run moon example/guess_game_extension/game_server_sim.lua
---- Protocol: send "player_id\tcmd\targ1\targ2...\n"; receive "target\tplayer_id(s)\tcmd\tdata\n"
+--- 模拟游戏服：一条 TCP 连 Moon，按 protocol 发上行、打印下行。
+--- 先启动 main_extension.lua，再运行本脚本。
 if _G["__init__"] then
     return { thread = 1, enable_stdout = true }
 end
 
 local moon = require("moon")
 local socket = require("moon.socket")
+local protocol = require("protocol")
 
 local HOST = "127.0.0.1"
 local PORT = 12346
@@ -22,12 +21,7 @@ moon.async(function()
     print("game_server_sim: connected to", HOST, PORT)
 
     local function send_line(player_id, cmd, ...)
-        local args = { ... }
-        local line = player_id .. "\t" .. cmd
-        for _, a in ipairs(args) do
-            line = line .. "\t" .. tostring(a)
-        end
-        socket.write(fd, line .. "\n")
+        socket.write(fd, protocol.format_upstream(player_id, cmd, ...))
     end
 
     -- reader: print every line from Moon

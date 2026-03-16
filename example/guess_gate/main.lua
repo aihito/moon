@@ -16,6 +16,9 @@ local services = {
     { unique = true, name = "bridge", file = "service_bridge.lua", threadid = 3 },
 }
 
+-- Shared ref so shutdown callback can close listenfd (unblock accept in worker 1).
+local listenfd_ref = {}
+
 moon.async(function()
     for _, one in ipairs(services) do
         local id = moon.new_service(one)
@@ -30,30 +33,49 @@ moon.async(function()
         moon.exit(-1)
         return
     end
+    listenfd_ref.fd = listenfd
 
     print("guess_game_extension: listen", host, port, " (game server connects here)")
 
     -- accept(listenfd, bridge_id): new connection is owned by bridge's worker (see socket_server::accept).
-    -- So read/write in bridge run in the same thread as the fd; no cross-thread fd use.
     local bridge_id = moon.queryservice("bridge")
     while true do
         local fd, err = socket.accept(listenfd, bridge_id)
         if not fd then
+            if listenfd_ref.shutdown then
+                break
+            end
             print("accept error:", err)
         else
             moon.send("lua", bridge_id, "set_fd", fd)
-            -- next iteration waits for another connection (after game server disconnects)
         end
     end
 end)
 
 moon.shutdown(function()
+    listenfd_ref.shutdown = true
+    if listenfd_ref.fd and listenfd_ref.fd > 0 then
+        socket.close(listenfd_ref.fd)
+        listenfd_ref.fd = 0
+    end
     moon.async(function()
         local center_id = moon.queryservice("center")
         if center_id and center_id > 0 then
             moon.send("lua", center_id, "shutdown")
         end
-        moon.sleep(500)
+        local bridge_id = moon.queryservice("bridge")
+        if bridge_id and bridge_id > 0 then
+            moon.kill(bridge_id)
+        end
+        -- wait until only bootstrap left (like guess_game)
+        while true do
+            local size = moon.server_stats("service.count")
+            if size == 1 then
+                break
+            end
+            moon.sleep(200)
+            print("guess_game_extension: wait all service quit, now count:", size)
+        end
         moon.quit()
     end)
 end)
