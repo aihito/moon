@@ -53,7 +53,7 @@ TCP 连接在创建时确定**类型**（listen 时的 `type` 或 connect 时的
 - **accept(fd, sessionid, owner)**：在**本 worker** 的 acceptors_ 里找到 listenfd；取 **owner 所在 worker** `w`，在 `w` 里 `make_connection(owner, ctx->type, tcp::socket(w->io_context()))`，即新 socket 用 **owner 的 io_context**；然后对本线程的 `ctx->acceptor.async_accept(c->socket(), ...)`，完成后在 **owner 的 worker** 上 `add_connection`，并把 fd 通过 message 回给调用 accept 的 service（通常即 listen 所在 service）。
 - **connect(host, port, owner, type, sessionid, timeout)**：在**当前 worker** 上 `make_connection(owner, type, tcp::socket(context_))`，async_connect 成功后把 conn 放入**当前 worker** 的 connections_，并给 owner 发一条带 fd 的 message（owner 可能与当前 worker 不同，但连接 fd 一定在当前 worker）。
 
-要点：**listen 与 accept 的调用、以及 async_accept 的完成，都发生在“持有 listenfd 的 worker”上；新连接 fd 的归属由 accept 的 owner 或 connect 的当前 worker 决定，之后该 fd 的 read/write 只在该 worker 上执行。** 详见 [game_server_extension_integration.md](game_server_extension_integration.md) 中的“线程与 fd”说明。
+要点：**listen 与 accept 的调用、以及 async_accept 的完成，都发生在“持有 listenfd 的 worker”上；新连接 fd 的归属由 accept 的 owner 或 connect 的当前 worker 决定，之后该 fd 的 read/write 只在该 worker 上执行。** 详见 [game_server_gate_single_node.md](game_server_gate_single_node.md) 中的“线程与 fd”说明。
 
 ---
 
@@ -121,4 +121,4 @@ UDP 的 fd 与 TCP 的 fd 共用同一套 nextfd，但分别存在 udp_ 与 conn
 | 消息到 Lua | connection 事件 → socket_server::handle_message(serviceid, msg) → 本 worker 的 service（Lua）；跨 worker 需业务层再转发。 |
 
 相关文档：  
-[tcp_server_listen_to_callback_flow.md](tcp_server_listen_to_callback_flow.md)、[socket_close_and_lua_callback.md](socket_close_and_lua_callback.md)、[moon_decode_format_reference.md](moon_decode_format_reference.md)、[game_server_extension_integration.md](game_server_extension_integration.md)。
+[tcp_server_listen_to_callback_flow.md](tcp_server_listen_to_callback_flow.md)、[socket_close_and_lua_callback.md](socket_close_and_lua_callback.md)、[moon_decode_format_reference.md](moon_decode_format_reference.md)、[game_server_gate_single_node.md](game_server_gate_single_node.md)。

@@ -34,7 +34,8 @@
 
 | 文档 | 说明 |
 |------|------|
-| [game_server_extension_integration.md](game_server_extension_integration.md) | **游戏服 + Moon 扩展**：玩家已在游戏服登录，Moon 作扩展（匹配/房间/战斗），消息由游戏服转发；与 guess_game 的对比与接入方案 |
+| [game_server_gate_single_node.md](game_server_gate_single_node.md) | **游戏服网关 · 单节点**：玩家已在游戏服登录，Moon 作网关（匹配/房间/战斗），消息由游戏服转发；与 guess_game 的对比与接入方案 |
+| [game_server_gate_multinode.md](game_server_gate_multinode.md) | **游戏服网关 · 多节点扩展**：多台 Moon 节点、游戏服路由、仅本节点/全局匹配、房间落节点 |
 
 ## 其他
 

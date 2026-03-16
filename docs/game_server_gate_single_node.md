@@ -1,12 +1,14 @@
-# 游戏服 + Moon 扩展接入方案（匹配 / 房间 / 战斗）
+# 游戏服网关 · 单节点接入方案（匹配 / 房间 / 战斗）
 
-本文面向**已有游戏服、Moon 仅作扩展逻辑**的场景：玩家已在游戏服登录，游戏服与 Moon 建立**一条连接**，扩展玩法（匹配、房间、同房战斗）的消息由**游戏服转发**，Moon 只做逻辑，回包经游戏服再转发给玩家。结构上参考 `guess_game`，但**不**由 Moon 直接接客户端 TCP。
+本文面向**已有游戏服、Moon 作为网关做扩展逻辑**的场景：玩家已在游戏服登录，游戏服与 Moon 建立**一条连接**，扩展玩法（匹配、房间、同房战斗）的消息由**游戏服转发**，Moon 只做逻辑，回包经游戏服再转发给玩家。结构上参考 `guess_game`，但**不**由 Moon 直接接客户端 TCP。
+
+**多节点扩展**（多台 Moon 水平扩展、匹配策略、全局匹配等）见 [game_server_gate_multinode.md](game_server_gate_multinode.md)。本文为**单节点**方案。示例代码见 `example/guess_gate/`。
 
 ---
 
 ## 1. 与 guess_game 的差异
 
-| 项目 | guess_game（Moon 即游戏服） | 本方案（游戏服 + Moon 扩展） |
+| 项目 | guess_game（Moon 即游戏服） | 本方案（游戏服 + Moon 网关） |
 |------|-----------------------------|------------------------------|
 | 客户端连接 | 客户端直连 Moon（socket.listen + 一连接一 user 服务） | 客户端只连**游戏服**；Moon 不接客户端 |
 | 玩家身份 | 每个连接一个 `service_user`，持有 `fd` | 玩家身份由游戏服维护；Moon 侧只认 **player_id**，无额外“玩家服务” |
@@ -109,14 +111,15 @@
 ## 5. 目录与文件建议（三服务，无 user_proxy）
 
 ```
-extension/
-├── main_extension.lua    # 入口：启动 center、监听“游戏服连接”端口、accept 后创建/绑定 bridge
-├── service_bridge.lua   # 与游戏服的一条连接：收包解包 → 转 center/room；维护 player_room；收 forward/forward_broadcast → 写 fd
-├── service_center.lua   # 匹配逻辑（与 guess_game 的 center 类似，client = { player_id, name }）
-└── service_room.lua     # 房间逻辑（与 guess_game 的 room 类似，broadcast/单发都发 bridge 的 forward/forward_broadcast）
+guess_gate/
+├── main.lua              # 入口：启动 center、监听“游戏服连接”端口、accept 后把 fd 交给 bridge
+├── service_bridge.lua    # 与游戏服的一条连接：收包解包 → 转 center/room；维护 player_room；收 forward/forward_broadcast → 写 fd
+├── service_center.lua    # 匹配逻辑（与 guess_game 的 center 类似，client = { player_id, name }）
+├── service_room.lua      # 房间逻辑（与 guess_game 的 room 类似，broadcast/单发都发 bridge 的 forward/forward_broadcast）
+└── protocol.lua          # 协议解析与组包（可选，便于扩展）
 ```
 
-- **main_extension.lua**：  
+- **main.lua**：  
   - `moon.new_service` center（unique）；  
   - `socket.listen(host, port_for_gameserver, moon.PTYPE_SOCKET_TCP)`（或 MOON 协议）；  
   - 循环里 `socket.accept(listenfd, bridge_id)` 接受连接，把 fd 通过 `moon.send("lua", bridge_id, "set_fd", fd)` 交给 bridge；若断线可再 accept 等待游戏服重连。  
@@ -154,4 +157,30 @@ extension/
 | 匹配 / 房间 / 战斗 | 与 guess_game 一致：center 做匹配与房间分配，room 做房间内逻辑；“客户端”即 `{ player_id, name }`，广播/单发都经 bridge。 |
 | 协议 | 上行带 player_id、session_id、cmd、args；下行带 target（player / room_broadcast）、player_id(s)、cmd、data；具体格式可与游戏服约定（JSON、pb 等）。 |
 
-按此方案即可在保留 guess_game 式“匹配 + 房间 + 同房战斗”的前提下，把“客户端连接”全部放在游戏服，Moon 只做扩展逻辑、消息经由游戏服转发；**无需 user_proxy**，仅 bridge + center + room 三服务。
+按此方案即可在保留 guess_game 式“匹配 + 房间 + 同房战斗”的前提下，把“客户端连接”全部放在游戏服，Moon 只做网关逻辑、消息经由游戏服转发；**无需 user_proxy**，仅 bridge + center + room 三服务。
+
+---
+
+## 8. 扩展：单节点多游戏服（多 bridge）
+
+当**游戏服数量多**但**单 Moon 进程仍可承受**时，可在同一节点内使用**多个 bridge**：每 `accept` 一个连接就 `new_service(bridge)` 并把 fd 交给该 bridge，**center 唯一**，维护 `player_id → bridge_id` 和 `player_id → room_id`，下行按 bridge_id 转发。
+
+```
+┌─────────────┐                    ┌─────────────────────────────────────────────────────────┐
+│  游戏服 A   │─── 连接 ──────────►│  Moon 进程（单节点）                                       │
+└─────────────┘                    │  ┌─────────┐  ┌─────────┐  ┌────────┐  ┌────────┐       │
+┌─────────────┐                    │  │bridge_A│  │bridge_B │  │bridge_C│  │ ...    │       │
+│  游戏服 B   │─── 连接 ──────────►│  │ fd_A   │  │ fd_B   │  │ fd_C   │  │        │       │
+└─────────────┘                    │  └────┬────┘  └────┬────┘  └────┬───┘  └────────┘       │
+┌─────────────┐                    │       └────────────┼────────────┘                      │
+│  游戏服 C   │─── 连接 ──────────►│                    ▼                                    │
+└─────────────┘                    │  ┌─────────────────────────────────────────────────────┐ │
+                                   │  │ center（唯一）                                       │ │
+                                   │  │ player_id → bridge_id；player_id → room_id          │ │
+                                   │  └─────────────────────────────────────────────────────┘ │
+                                   └─────────────────────────────────────────────────────────┘
+```
+
+**要点**：listen 端口不变，每 `accept` 得到 fd 后 `moon.new_service({ name = "bridge", file = "service_bridge.lua" })` 得到新 bridge_id，再 `set_fd(fd)`；bridge 在首包或协议中上报 player_id / game_server_id，center 维护 `player_bridge[player_id] = bridge_id`；下行时 center/room 按 player_id 查 bridge_id 再 `send(bridge_id, "forward", ...)` 或按 bridge_id 分组 `forward_broadcast`。
+
+**多节点**（多台 Moon 水平扩展、仅本节点匹配 / 全局匹配、房间路由）见 [game_server_gate_multinode.md](game_server_gate_multinode.md)。
