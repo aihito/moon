@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+// 猜数游戏协议：Center 匹配 + Room 猜数
+// 上行 C2S：客户端 -> Center/Room；下行 S2C：Center/Room -> 客户端
+
+// ----- Center 匹配阶段 -----
+
+// 客户端：请求加入匹配
+message C2SReady {
+  string player_id = 1;
+}
+
+// 服务端：文本提示（欢迎语、已加入队列等）
+message S2CMsg {
+  string text = 1;
+}
+
+// 服务端：匹配成功，通知连接房间
+message S2CMatchOk {
+  string room_addr = 1;  // host:port
+  string room_id = 2;
+}
+
+// ----- Room 猜数阶段 -----
+
+// 客户端：附着到房间（首行）
+message C2SAttachRoom {
+  string room_id = 1;
+  repeated string player_ids = 2;
+}
+
+// 客户端：猜数字（带 room_id 以便多房间路由，player_id 标识谁猜的）
+message C2SGuess {
+  string room_id = 1;
+  string player_id = 2;
+  int32 number = 3;
+}
+
+// 服务端：区间提示
+message S2CGuessRange {
+  int32 lo = 1;
+  int32 hi = 2;
+}
+
+// 服务端：游戏结束
+message S2CGameOver {
+  string result = 1;   // "win" / "lose"
+  int32 answer = 2;
+}

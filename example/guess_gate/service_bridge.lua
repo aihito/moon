@@ -2,7 +2,7 @@
 --- 协议与格式见 protocol.lua；扩展新上行命令只需在 upstream_handlers 中加一项。
 local moon = require("moon")
 local socket = require("moon.socket")
-local protocol = require("protocol")
+local protocol = require("shared.protocol")
 
 local fd = 0
 local player_room = {}  -- player_id -> room_id
