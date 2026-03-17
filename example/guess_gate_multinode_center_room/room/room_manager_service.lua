@@ -27,12 +27,12 @@ end
 local function on_upstream_frame(fd, cmd_id, payload)
     local name = protocol.CmdCode.name(cmd_id)
     if not name then
-        write_fd_binary(fd, "S2CMsg", { text = "未知消息类型" })
+        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
         return
     end
-    local ok, req = pcall(protocol.decode, name, payload)
+    local ok, _msg_name, req = pcall(protocol.decode, name, payload)
     if not ok or not req then
-        write_fd_binary(fd, "S2CMsg", { text = "协议解析错误" })
+        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
         return
     end
 
@@ -40,12 +40,12 @@ local function on_upstream_frame(fd, cmd_id, payload)
         local room_id = req.room_id and tostring(req.room_id) or ""
         local player_ids = req.player_ids or {}
         if room_id == "" or #player_ids == 0 then
-            write_fd_binary(fd, "S2CMsg", { text = "attach_room 需要 room_id 和 player_ids" })
+            write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_BAD_ATTACH_ROOM", text = "attach_room 需要 room_id 和 player_ids" })
             return
         end
         local room_sid = rooms[room_id]
         if not room_sid or room_sid == 0 then
-            write_fd_binary(fd, "S2CMsg", { text = "房间不存在: " .. room_id })
+            write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_ROOM_NOT_FOUND", text = "房间不存在: " .. room_id })
             return
         end
         moon.send("lua", room_sid, "add_conn", fd, player_ids)
@@ -59,19 +59,19 @@ local function on_upstream_frame(fd, cmd_id, payload)
         local pid = req.player_id and tostring(req.player_id) or ""
         local num = req.number and math.tointeger(req.number)
         if rid == "" or not num then
-            write_fd_binary(fd, "S2CMsg", { text = "C2SGuess 需要 room_id 和 number" })
+            write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_BAD_GUESS", text = "C2SGuess 需要 room_id 和 number" })
             return
         end
         local room_sid = rooms[rid]
         if room_sid and room_sid > 0 then
             moon.send("lua", room_sid, "on_msg", fd, pid, "C2SGuess", { number = num })
         else
-            write_fd_binary(fd, "S2CMsg", { text = "房间不存在: " .. rid })
+            write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_ROOM_NOT_FOUND", text = "房间不存在: " .. rid })
         end
         return
     end
 
-    write_fd_binary(fd, "S2CMsg", { text = "未知命令: " .. name })
+    write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
 end
 
 --- Per-connection read loop: 二进制帧

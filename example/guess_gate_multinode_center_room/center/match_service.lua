@@ -56,7 +56,7 @@ local function try_match()
     if not ok then
         print("[match] create_room failed", room_id, err)
         for _, v in ipairs(ready_client) do
-            send_to_player(v.name, "S2CMsg", { text = "创建房间失败，请重试" })
+            send_to_player(v.name, "S2CNotify", { reason = "NOTIFY_REASON_CREATE_ROOM_FAILED", text = "创建房间失败，请重试" })
         end
         return
     end
@@ -89,7 +89,7 @@ function command.ready(client)
         send_to_player(client.name, "S2CMatchOk", { room_addr = addr, room_id = rid })
         return
     end
-    send_to_player(client.name, "S2CMsg", { text = "已加入匹配队列" })
+    send_to_player(client.name, "S2CNotify", { reason = "NOTIFY_REASON_JOIN_QUEUE", text = "已加入匹配队列" })
     if not match_state[client.name] then
         match_state[client.name] = true
         match_queue[#match_queue + 1] = client

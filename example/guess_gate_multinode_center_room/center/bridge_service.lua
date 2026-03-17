@@ -29,18 +29,18 @@ end
 upstream_handlers.join_match = upstream_handlers.C2SReady
 
 function upstream_handlers.C2SGuess(req)
-    write_downstream(req.fd, "player", req.player_id, "S2CMsg", { text = "请先匹配并连接房间服" })
+    write_downstream(req.fd, "player", req.player_id, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
 end
 
 local function on_upstream_frame(fd, cmd_id, payload)
     local name = protocol.CmdCode.name(cmd_id)
     if not name then
-        write_downstream(fd, "player", "*", "S2CMsg", { text = "未知消息类型" })
+        write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
         return
     end
-    local ok, req = pcall(protocol.decode, name, payload)
+    local ok, _msg_name, req = pcall(protocol.decode, name, payload)
     if not ok or not req then
-        write_downstream(fd, "player", "*", "S2CMsg", { text = "协议解析错误" })
+        write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
         return
     end
     req.fd = fd
@@ -53,7 +53,7 @@ local function on_upstream_frame(fd, cmd_id, payload)
     if fn then
         fn(req)
     else
-        write_downstream(fd, "player", req.player_id or "*", "S2CMsg", { text = "未知命令: " .. name })
+        write_downstream(fd, "player", req.player_id or "*", "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
     end
 end
 
@@ -81,7 +81,7 @@ function command.add_fd(fd)
     if addr_center == 0 then
         addr_center = moon.queryservice("center")
     end
-    write_downstream(fd, "player", "*", "S2CMsg", { text = "欢迎，输入 ready 匹配；匹配成功后请连接房间服" })
+    write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
     local cmd_id, payload = protocol.read_frame(fd, 300)
     if cmd_id then
         on_upstream_frame(fd, cmd_id, payload)

@@ -11,7 +11,7 @@
 
 - **当前**：仍使用文本行协议（`shared/protocol.lua`），格式为 `player_id\tcmd\targs` / `target\tplayer_ids\tcmd\tdata`。
 - **Protobuf**：已引入 `.proto` 定义与多线程加载，供后续扩展或切换为 pb 消息体。
-  - 协议定义：`protocol/proto/guess.proto`（C2SReady、S2CMsg、S2CMatchOk、C2SGuess、S2CGameOver 等）。
+  - 协议定义：`protocol/proto/guess.proto`（C2SReady、S2CNotify、S2CMatchOk、C2SGuess、S2CGameOver 等）。
   - 消息 ID 映射：`protocol/CmdCode.lua`。
   - **生成 .pb**（可选，用于启动时直接加载二进制）：在仓库根目录执行  
     `./example/guess_gate_multinode_center_room/run.sh gen_proto`  

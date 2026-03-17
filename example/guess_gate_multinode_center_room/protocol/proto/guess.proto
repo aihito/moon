@@ -10,9 +10,28 @@ message C2SReady {
   string player_id = 1;
 }
 
-// 服务端：文本提示（欢迎语、已加入队列等）
-message S2CMsg {
-  string text = 1;
+// 服务端：通知（用枚举标识原因，可附带 text 便于调试或展示）
+enum NotifyReason {
+  NOTIFY_REASON_UNSPECIFIED = 0;
+  NOTIFY_REASON_WELCOME = 1;
+  NOTIFY_REASON_JOIN_QUEUE = 2;
+  NOTIFY_REASON_CREATE_ROOM_FAILED = 3;
+  NOTIFY_REASON_NEED_MATCH_FIRST = 4;
+  NOTIFY_REASON_UNKNOWN_MSG_TYPE = 5;
+  NOTIFY_REASON_DECODE_ERROR = 6;
+  NOTIFY_REASON_BAD_ATTACH_ROOM = 7;
+  NOTIFY_REASON_ROOM_NOT_FOUND = 8;
+  NOTIFY_REASON_BAD_GUESS = 9;
+  NOTIFY_REASON_UNKNOWN_CMD = 10;
+  NOTIFY_REASON_PLAYER_LEFT = 11;
+  NOTIFY_REASON_GUESS_SUCCESS = 12;
+  NOTIFY_REASON_GUESS_FAILED = 13;
+  NOTIFY_REASON_JOIN_ROOM = 14;
+}
+
+message S2CNotify {
+  NotifyReason reason = 1;
+  string text = 2;
 }
 
 // 服务端：匹配成功，通知连接房间

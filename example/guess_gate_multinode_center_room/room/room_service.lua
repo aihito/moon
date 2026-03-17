@@ -64,7 +64,7 @@ local function room_conn_left(fd, left_player_ids)
     end
     local left_names = table.concat(left_player_ids, ",")
     for other_fd, _ in pairs(conns) do
-        write_room_fd(other_fd, "S2CMsg", { text = "玩家 " .. left_names .. " 离开，本局结束" })
+        write_room_fd(other_fd, "S2CNotify", { reason = "NOTIFY_REASON_PLAYER_LEFT", text = "玩家 " .. left_names .. " 离开，本局结束" })
         write_room_fd(other_fd, "S2CGameOver", { result = "leave", answer = 0 })
     end
     if next(conns) == nil then
@@ -81,11 +81,11 @@ local function on_msg(fd, player_id, cmd, data)
     if cmd == "C2SGuess" then
         local num = data and data.number and math.tointeger(data.number)
         if not num then
-            send_to_player_room(player_id, "S2CMsg", { text = "无效的数字格式!" })
+            send_to_player_room(player_id, "S2CNotify", { reason = "NOTIFY_REASON_BAD_GUESS", text = "无效的数字格式!" })
             return
         end
         if random_num == num then
-            broadcast_room("S2CMsg", { text = player_id .. " 猜测成功, 游戏结束" })
+            broadcast_room("S2CNotify", { reason = "NOTIFY_REASON_GUESS_SUCCESS", text = player_id .. " 猜测成功, 游戏结束" })
             send_to_player_room(player_id, "S2CGameOver", { result = "win", answer = random_num })
             for _, pid in ipairs(players) do
                 if pid ~= player_id then
@@ -99,7 +99,7 @@ local function on_msg(fd, player_id, cmd, data)
                 if random_num < num then max_guess = num end
             end
             broadcast_room("S2CGuessRange", { lo = min_guess, hi = max_guess })
-            broadcast_room("S2CMsg", { text = ("%s 猜测失败, 现在的区间是[%d-%d]"):format(player_id, min_guess, max_guess) })
+            broadcast_room("S2CNotify", { reason = "NOTIFY_REASON_GUESS_FAILED", text = ("%s 猜测失败, 现在的区间是[%d-%d]"):format(player_id, min_guess, max_guess) })
         end
     end
 end
@@ -117,7 +117,7 @@ end
 function command.add_conn(fd, player_ids)
     if closed then return end
     conns[fd] = player_ids
-    write_room_fd(fd, "S2CMsg", { text = "已加入房间 " .. room_id .. " 区间[" .. min_guess .. "-" .. max_guess .. "]" })
+    write_room_fd(fd, "S2CNotify", { reason = "NOTIFY_REASON_JOIN_ROOM", text = "已加入房间 " .. room_id .. " 区间[" .. min_guess .. "-" .. max_guess .. "]" })
     write_room_fd(fd, "S2CGuessRange", { lo = min_guess, hi = max_guess })
 end
 

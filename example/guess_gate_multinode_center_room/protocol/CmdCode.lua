@@ -6,7 +6,7 @@ local CmdCode = {
     C2SAttachRoom = 2,
     C2SGuess = 3,
     -- S2C
-    S2CMsg = 101,
+    S2CNotify = 101,
     S2CMatchOk = 102,
     S2CGuessRange = 103,
     S2CGameOver = 104,
