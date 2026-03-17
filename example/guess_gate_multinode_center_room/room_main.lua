@@ -2,10 +2,11 @@
 --- See docs/game_server_gate_multinode.md §6.6.
 if _G["__init__"] then
     arg = ...
+    local ts = os.date("%Y%m%d-%H%M%S")
     return {
         thread = 3,
         enable_stdout = true,
-        logfile = string.format("log/game-%s-%s.log", arg[1], os.date("%Y-%m-%d-%H-%M-%S")),
+        logfile = string.format("log/room-%s.log", ts),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",

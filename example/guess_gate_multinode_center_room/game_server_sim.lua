@@ -2,10 +2,12 @@
 if _G["__init__"] then
     -- 从脚本所在目录或仓库根解析 path（run.sh 从仓库根执行，moon 可能 cwd 为脚本目录）
     arg = ...
+    local player_id = os.getenv("SIM_PLAYER") or (arg and arg[1]) or "unknown"
+    local ts = os.date("%Y%m%d-%H%M%S")
     return {
         thread = 1,
         enable_stdout = true,
-        logfile = string.format("log/game-%s-%s.log", arg[1], os.date("%Y-%m-%d-%H-%M-%S")),
+        logfile = string.format("log/sim-%s-%s.log", player_id, ts),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",
@@ -72,9 +74,12 @@ local function match_phase()
         print("[Center->", player_id, "]", req.text or "", "reason=", req.reason or "")
     end
 
-    -- 客户端处理协议后自动 ready
+    -- 客户端处理协议后只发一次 ready，等待 Center 返回 S2CMatchOk 后再进入 Room 阶段。
+    -- 不再周期 ping，避免造成 match 阶段重复 ready / 重复入队刷日志。
     protocol.write_frame(cf, "C2SReady", { player_id = player_id })
     moon.sleep(80)
+
+    local match_done = { v = false }
 
     local room_addr, room_id
     while true do
@@ -87,10 +92,13 @@ local function match_phase()
         if name == "S2CNotify" then
             print("[Center->", player_id, "]", req.text or "", "reason=", req.reason or "")
             if req.reason == "NOTIFY_REASON_CREATE_ROOM_FAILED" then
+                match_done.v = true
                 break
             end
         elseif name == "S2CMatchOk" then
-            room_addr, room_id = req.room_addr, req.room_id
+            match_done.v = true
+            room_addr = (tostring(req.room_addr or "")):gsub("^%s+", ""):gsub("%s+$", "")
+            room_id = (tostring(req.room_id or "")):gsub("^%s+", ""):gsub("%s+$", "")
             print("[", player_id, "] match_ok", room_addr, room_id)
             break
         end
@@ -101,6 +109,8 @@ end
 
 --- 阶段2：连 Room，发 C2SAttachRoom，读 S2CNotify / S2CGuessRange / S2CGameOver，猜数
 local function room_phase(room_addr, room_id)
+    room_addr = (room_addr or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    room_id = (room_id or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local host, port = room_addr:match("^([^:]+):(%d+)$")
     if not host then host, port = room_addr, "13002" end
     port = tonumber(port) or 13002

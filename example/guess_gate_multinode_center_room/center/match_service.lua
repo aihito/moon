@@ -2,7 +2,8 @@
 local moon = require("moon")
 
 local match_queue = {}
-local match_state = {}
+-- in_queue[player] = true 表示已在匹配队列中（防止客户端 ping 重复入队）
+local in_queue = {}
 -- user_rooms[player_name] = { room_id = "...", room_addr = "host:port" }
 local user_rooms = {}
 local max_player_number = 2
@@ -21,7 +22,9 @@ end
 --- 通过 room_gate 建房；返回 ok, err, room_addr。room_addr 由 Room 节点上报，用于 match_ok 通知客户端。
 local function rpc_create_room(room_id, players)
     if addr_room_gate == 0 then addr_room_gate = moon.queryservice("room_gate") end
+    print("[match] rpc_create_room call", room_id, "addr_room_gate=", addr_room_gate)
     local r = moon.call("lua", addr_room_gate, "create_room", room_id, players)
+    print("[match] rpc_create_room ret", room_id, r and (r.ok and "ok" or "fail") or "nil")
     if r and r.ok then
         return true, nil, r.room_addr
     end
@@ -35,15 +38,13 @@ local function try_match()
     while #ready_client < max_player_number do
         local client = table.remove(match_queue, 1)
         if not client then break end
-        if match_state[client.name] then
-            match_state[client.name] = nil
-            ready_client[#ready_client + 1] = client
-        end
+        in_queue[client.name] = nil
+        ready_client[#ready_client + 1] = client
     end
 
     if #ready_client ~= max_player_number then
         for _, v in ipairs(ready_client) do
-            match_state[v.name] = true
+            in_queue[v.name] = true
             table.insert(match_queue, 1, v)
         end
         return
@@ -51,17 +52,25 @@ local function try_match()
 
     local room_id = ("%d_%s_%s"):format(os.time(), ready_client[1].name, ready_client[2].name)
     local players = { ready_client[1].name, ready_client[2].name }
+    -- 在 yield 等待 create_room 前先占位，避免等待期间 ready(ping) 再次入队导致重复 create_room
+    for _, c in ipairs(ready_client) do
+        user_rooms[c.name] = { creating = true }
+    end
     print("[match] create_room start", room_id, table.concat(players, ","))
     local ok, err, room_addr = rpc_create_room(room_id, players)
     if not ok then
         print("[match] create_room failed", room_id, err)
         for _, v in ipairs(ready_client) do
+            user_rooms[v.name] = nil
+            if not in_queue[v.name] then
+                in_queue[v.name] = true
+                match_queue[#match_queue + 1] = v
+            end
             send_to_player(v.name, "S2CNotify", { reason = "NOTIFY_REASON_CREATE_ROOM_FAILED", text = "创建房间失败，请重试" })
         end
         return
     end
     print("[match] create_room ok", room_id, room_addr or "")
-    -- Room 节点信息由 Center 通知到客户端：优先使用 Room 上报的 room_addr，否则用配置
     if not room_addr or room_addr == "" then
         room_addr = ("%s:%d"):format(ROOM_GAME_HOST, ROOM_GAME_PORT)
     end
@@ -70,7 +79,6 @@ local function try_match()
         send_to_player(c.name, "S2CMatchOk", { room_addr = room_addr, room_id = room_id })
         print("[match] sent match_ok to", c.name)
     end
-    -- Yield so bridge (other thread) can process forward and write to client fds
     moon.sleep(0)
 end
 
@@ -80,7 +88,11 @@ function command.ready(client)
     print("[match] ready", client.name or client.player_id, "queue=", #match_queue)
     local ur = user_rooms[client.name]
     if ur then
-        -- Player already in a room: resend match_ok so client can reconnect to Room node.
+        if ur.creating then
+            -- 正在建房中，不重入队也不发 match_ok，直接忽略
+            return
+        end
+        -- 已在房间：重发 match_ok（客户端 ping 或重连时）
         local addr = ur.room_addr
         if not addr or addr == "" then
             addr = ("%s:%d"):format(ROOM_GAME_HOST, ROOM_GAME_PORT)
@@ -90,8 +102,9 @@ function command.ready(client)
         return
     end
     send_to_player(client.name, "S2CNotify", { reason = "NOTIFY_REASON_JOIN_QUEUE", text = "已加入匹配队列" })
-    if not match_state[client.name] then
-        match_state[client.name] = true
+    -- 仅首次 ready 入队并 try_match，重复 ready（如客户端 ping）不再入队
+    if not in_queue[client.name] then
+        in_queue[client.name] = true
         match_queue[#match_queue + 1] = client
         try_match()
     end

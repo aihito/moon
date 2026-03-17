@@ -57,11 +57,17 @@ local function on_upstream_frame(fd, cmd_id, payload)
     end
 end
 
+--- 读循环：不在 fd 上 settimeout（C++ 超时会 close(fd) 导致断线）。每处理完一帧后 moon.sleep(0) 让出，
+--- 以便本 worker 处理消息队列中的 forward(S2CMatchOk)。
+--- 关键点：不要用无 timeout 的 socket.read，否则会阻塞整个 worker，导致 forward 写包也得不到调度。
 local function start_read_loop(fd)
     moon.async(function()
+        -- 使用当前 moon.socket.read 接口不支持 frame-level timeout。
+        -- 这里仅依靠 moon.sleep(0) 让出调度，保证 forward(S2CMatchOk) 能及时执行。
         while conns[fd] do
-            local cmd_id, payload = protocol.read_frame(fd)
+            local cmd_id, payload_or_err = protocol.read_frame(fd)
             if not cmd_id then
+                print("[bridge] read failed, closing fd=", fd, "err=", payload_or_err)
                 conns[fd] = nil
                 for pid, f in pairs(player_fd) do
                     if f == fd then player_fd[pid] = nil end
@@ -69,7 +75,8 @@ local function start_read_loop(fd)
                 if fd > 0 then socket.close(fd) end
                 return
             end
-            on_upstream_frame(fd, cmd_id, payload)
+            on_upstream_frame(fd, cmd_id, payload_or_err)
+            moon.sleep(0)
         end
     end)
 end
@@ -82,7 +89,8 @@ function command.add_fd(fd)
         addr_center = moon.queryservice("center")
     end
     write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
-    local cmd_id, payload = protocol.read_frame(fd, 300)
+    -- 首包读也用 timeout，避免阻塞 worker（没有首包就进入 read_loop 继续处理）
+    local cmd_id, payload = protocol.read_frame(fd)
     if cmd_id then
         on_upstream_frame(fd, cmd_id, payload)
     end
@@ -95,9 +103,12 @@ function command.forward(target, player_id, _session_id, msg_name, data)
     end
     local fd = player_fd[player_id]
     if fd and conns[fd] then
-        protocol.write_frame(fd, msg_name, data)
+        local ok = protocol.write_frame(fd, msg_name, data or {})
         if msg_name == "S2CMatchOk" then
-            print("[bridge] forward match_ok written ->", player_id, "fd=", fd)
+            print("[bridge] forward match_ok written ->", player_id, "fd=", fd, "ok=", ok)
+        end
+        if not ok and msg_name == "S2CMatchOk" then
+            print("[bridge] ERROR write_frame failed for", player_id)
         end
     elseif msg_name == "S2CMatchOk" then
         print("[bridge] forward match_ok SKIP: no fd for player", player_id)

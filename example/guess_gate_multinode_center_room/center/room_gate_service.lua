@@ -34,8 +34,10 @@ local function do_create_room(room_id, players)
         remove_fd(fd)
         return false, err or resp, nil
     end
-    -- Room may reply "ok\troom_id" or "ok\troom_id\troom_addr"
-    local _, room_addr = resp:match("^ok\t[^\t]+\t(.+)$")
+    resp = resp:gsub("^%s+", ""):gsub("%s+$", "")
+    -- Room may reply "ok\troom_id" or "ok\troom_id\troom_addr"；match 只返回一个捕获 (.+)，不能写成 _, room_addr
+    local room_addr = resp:match("^ok\t[^\t]+\t(.+)$")
+    if room_addr then room_addr = room_addr:gsub("%s+$", "") end
     print("[room_gate] create_room ok", room_id, room_addr or "")
     return true, nil, room_addr
 end
@@ -101,9 +103,9 @@ moon.dispatch("lua", function(sender, session, cmd, ...)
     local fn = command[cmd]
     if fn then
         local ret = fn(...)
-        if session and session > 0 then
-            moon.response("lua", sender, session, ret)
-        end
+        -- 兼容 moon.send(session=0) 与 moon.call(session>0)：
+        -- moon.response 在 session=0 时会安全忽略；避免因 session 类型/比较导致不回包而让 moon.call 卡死。
+        moon.response("lua", sender, session, ret)
     else
         moon.error("room_gate unknown command", cmd)
     end

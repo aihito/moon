@@ -2,10 +2,12 @@
 --- See docs/game_server_gate_multinode.md §6.6 (Center + Room, no Gate).
 if _G["__init__"] then
     arg = ...
+    local ts = os.date("%Y%m%d-%H%M%S")
+    -- 单 worker 保证 bridge 的 read_loop 在 moon.sleep(0) 后能立刻处理 match 发来的 forward(S2CMatchOk)
     return {
-        thread = 4,
+        thread = 1,
         enable_stdout = true,
-        logfile = string.format("log/game-%s-%s.log", arg[1], os.date("%Y-%m-%d-%H-%M-%S")),
+        logfile = string.format("log/center-%s.log", ts),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",
