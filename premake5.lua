@@ -99,7 +99,7 @@ newaction {
             end
             return code
         end
-        run_soft("git checkout master")
+        -- run_soft("git checkout master")
         run_soft("git pull")
         run_soft("git submodule init")
         run_soft("git submodule update")
