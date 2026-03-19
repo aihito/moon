@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test script for Center + Room multinode example. Run from repo root:
-#   ./example/guess_gate_multinode_center_room/run.sh [start|center|room|stop|kill_all|test|test_multi_room|gen_proto|clean_logs]
+#   ./example/guess_gate_multinode_center_room/run.sh [start|center|room|stop|restart|kill_all|test|test_multi_room|gen_proto|clean_logs]
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -14,9 +14,9 @@ else
 fi
 EX="example/guess_gate_multinode_center_room"
 LOG_DIR="$EX/log"
-PID_DIR="${PID_DIR:-$EX}"
-ROOM_PID="$PID_DIR/.room.pid"
-CENTER_PID="$PID_DIR/.center.pid"
+PID_DIR="${PID_DIR:-$EX/pid}"
+ROOM_PID="$PID_DIR/room.pid"
+CENTER_PID="$PID_DIR/center.pid"
 
 mkdir -p "$PID_DIR"
 mkdir -p "$LOG_DIR"
@@ -89,12 +89,19 @@ start_all() {
     echo "Nodes ready. Center: 13001, Room: 13002, Room->Center: 13005"
 }
 
+restart_all() {
+    stop_all
+    cmd_clean_logs
+    sleep 0.5
+    start_all
+}
+
 # --- commands ---
 cmd_gen_proto() {
     echo "Compiling .proto -> .pb (from repo root)..."
     export MOON_REPO_ROOT="$REPO_ROOT"
     "$MOON" "$EX/tools/gen_proto.lua"
-    echo "Done. Optional: pass proto path and out path as args."
+    echo "gen_proto Done."
 }
 
 cmd_start() {
@@ -119,6 +126,10 @@ cmd_room() {
 
 cmd_stop() {
     stop_all
+}
+
+cmd_restart() {
+    restart_all
 }
 
 cmd_kill_all() {
@@ -164,11 +175,12 @@ cmd_test_multi_room() {
 }
 
 usage() {
-    echo "Usage: $0 {start|center|room|stop|kill_all|test|test_multi_room|gen_proto|clean_logs}"
+    echo "Usage: $0 {start|center|room|stop|restart|kill_all|test|test_multi_room|gen_proto|clean_logs}"
     echo "  start          Start Center + Room in background (from repo root)"
     echo "  center         Start Center only (port 13001, 13005)"
     echo "  room           Start Room only (port 13002, connects to Center)"
     echo "  stop           Stop Center and Room"
+    echo "  restart        Stop then start Center + Room"
     echo "  kill_all       Kill all moon processes for this example (center/room/sim)"
     echo "  test           Start nodes (if needed), run one match (alice + bob)"
     echo "  test_multi_room Start nodes, run 2 rooms in parallel (4 players)"
@@ -183,6 +195,7 @@ case "${1:-}" in
     center)  cmd_center ;;
     room)    cmd_room ;;
     stop)    cmd_stop ;;
+    restart) cmd_restart ;;
     kill_all) cmd_kill_all ;;
     test)    cmd_test ;;
     test_multi_room) cmd_test_multi_room ;;

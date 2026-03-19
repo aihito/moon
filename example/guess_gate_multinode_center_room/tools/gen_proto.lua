@@ -14,6 +14,7 @@ end
 
 local pb = require("pb")
 local protoc = require("protoc")
+local moon = require("moon")
 
 local function compile_proto(proto_path, out_path)
     local root = os.getenv("MOON_REPO_ROOT") or os.getenv("PWD") or "."
@@ -63,7 +64,10 @@ end
 
 compile_proto(proto_path, out_path)
 
-local moon = package.loaded.moon
+-- local moon = package.loaded.moon
 if moon and moon.quit then
-    moon.quit()
+    moon.async(function()
+        moon.sleep(1000)
+        moon.quit()
+    end)
 end

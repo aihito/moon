@@ -4,7 +4,7 @@ local moon = require("moon")
 local socket = require("moon.socket")
 local protocol = require("shared.protocol_pb")
 
-local addr_center = 0
+local addr_match = 0
 local player_fd = {}
 local conns = {}
 local listenfd = 0
@@ -20,16 +20,13 @@ local upstream_handlers = {}
 
 function upstream_handlers.C2SReady(req)
     req.fd = req.fd
-    local pid = (req.player_id and tostring(req.player_id)):gsub("^%s+", ""):gsub("%s+$", "")
-    if pid ~= "" and pid ~= "nil" then
+    local pid = req.player_id
+    if not pid or pid == "" then
         player_fd[pid] = req.fd
         print("[bridge] player registered: pid=", pid, "fd=", req.fd)
     end
-    if addr_center == 0 then addr_center = moon.queryservice("match") end
-    moon.send("lua", addr_center, "ready", { player_id = pid, name = pid })
+    moon.send("lua", addr_match, "ready", { player_id = pid, name = pid })
 end
-
-upstream_handlers.join_match = upstream_handlers.C2SReady
 
 function upstream_handlers.C2SGuess(req)
     write_downstream(req.fd, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
@@ -48,14 +45,13 @@ local function on_upstream_frame(fd, cmd_id, payload)
         return
     end
 
-    print("[bridge] recv cmd_id=", cmd_id, "name=", name, "req=", req)
+    -- print("[bridge] recv cmd_id=", cmd_id, "name=", name, "req=", req)
 
     req.fd = fd
     if req.player_id then
-        local pid = (tostring(req.player_id)):gsub("^%s+", ""):gsub("%s+$", "")
-        req.player_id = pid
-        player_fd[pid] = fd
+        player_fd[req.player_id] = fd
     end
+
     local fn = upstream_handlers[name]
     if fn then
         fn(req)
@@ -74,7 +70,7 @@ local function start_read_loop(fd)
         while conns[fd] do
             local cmd_id, payload_or_err = protocol.read_frame(fd)
             if not cmd_id then
-                print("[bridge] read failed, closing fd=", fd, "err=", payload_or_err)
+                print(string.format("[bridge] read failed, closing fd=%d err=%s", fd, payload_or_err or "nil"))
                 conns[fd] = nil
                 for pid, f in pairs(player_fd) do
                     if f == fd then
@@ -117,33 +113,26 @@ function command.start(host, port)
             end
         end
     end)
+
+    addr_match = moon.queryservice("match")
+    if not addr_match or addr_match == 0 then
+        print("[bridge] match service not found")
+        return
+    end
 end
 
 function command.add_fd(fd)
     conns[fd] = true
-    if addr_center == 0 then
-        addr_center = moon.queryservice("match")
-    end
     print("[bridge] add_fd fd=", fd)
     write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
     start_read_loop(fd)
 end
 
 function command.forward(target, player_id, _session_id, msg_name, data)
-    if msg_name == "S2CMatchOk" then
-        print("[bridge] forward match_ok recv player=", player_id)
-    end
     local fd = player_fd[player_id]
+    print(string.format("[bridge] forward to player: fd=%d player_id=%s msg_name=%s data=%s", fd, player_id, msg_name, print_r(data, true)))
     if fd and conns[fd] then
         local ok = protocol.write_frame(fd, msg_name, data or {})
-        if msg_name == "S2CMatchOk" then
-            print("[bridge] forward match_ok written ->", player_id, "fd=", fd, "ok=", ok)
-        end
-        if not ok and msg_name == "S2CMatchOk" then
-            print("[bridge] ERROR write_frame failed for", player_id)
-        end
-    elseif msg_name == "S2CMatchOk" then
-        print("[bridge] forward match_ok SKIP: no fd for player", player_id)
     end
 end
 

@@ -7,7 +7,8 @@ if _G["__init__"] then
     return {
         thread = 1,
         enable_stdout = true,
-        logfile = string.format("log/center-%s.log", ts),
+        -- logfile = string.format("log/center-%s.log", ts),
+        logfile = string.format("log/center.log"),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",
@@ -82,9 +83,11 @@ moon.async(function()
 
     local bridge_id = moon.queryservice("bridge")
     local room_gate_id = moon.queryservice("room_gate")
+    local match_id = moon.queryservice("match")
 
     moon.send("lua", room_gate_id, "start", host, room_port)
     moon.send("lua", bridge_id, "start", host, port)
+    moon.send("lua", match_id, "start")
 
     while true do
         moon.sleep(1000)

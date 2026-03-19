@@ -3,7 +3,7 @@ local moon = require("moon")
 local random = require("random")
 
 local manager_id = 0
-local room_id = ""
+local room_id = 0
 local players = {}
 local conns = {}       -- fd -> { player_ids }
 local random_num = 0

@@ -6,7 +6,8 @@ if _G["__init__"] then
     return {
         thread = 3,
         enable_stdout = true,
-        logfile = string.format("log/room-%s.log", ts),
+        -- logfile = string.format("log/room-%s.log", ts),
+        logfile = string.format("log/room.log"),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",
@@ -53,26 +54,21 @@ if not load_protocol() then
     return
 end
 
-local room_manager_id_ref = {}
-
 moon.async(function()
     local id = moon.new_service({ unique = true, name = "room_manager", file = "room/room_manager_service.lua" })
     if id == 0 then
         moon.exit(-1)
         return
     end
-    room_manager_id_ref.id = id
     moon.sleep(100)
     moon.send("lua", id, "start")
 end)
 
 moon.shutdown(function()
-    local id = room_manager_id_ref.id
     moon.async(function()
-        if id and id > 0 then
-            moon.send("lua", id, "shutdown")
-            moon.sleep(200)
-            moon.kill(id)
+        local room_manager_id = moon.queryservice("room_manager")
+        if room_manager_id and room_manager_id > 0 then
+            moon.send("lua", room_manager_id, "shutdown")
         end
         while true do
             local n = moon.server_stats("service.count")

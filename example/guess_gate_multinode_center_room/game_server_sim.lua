@@ -3,11 +3,13 @@ if _G["__init__"] then
     -- 从脚本所在目录或仓库根解析 path（run.sh 从仓库根执行，moon 可能 cwd 为脚本目录）
     arg = ...
     local player_id = os.getenv("SIM_PLAYER") or (arg and arg[1]) or "unknown"
+    player_id = tostring(player_id):gsub("^%s+", ""):gsub("%s+$", "")
     local ts = os.date("%Y%m%d-%H%M%S")
     return {
         thread = 1,
         enable_stdout = true,
-        logfile = string.format("log/sim-%s-%s.log", player_id, ts),
+        -- logfile = string.format("log/sim-%s-%s.log", player_id, ts),
+        logfile = string.format("log/sim-%s.log", player_id),
         loglevel = "DEBUG",
         path = table.concat({
             "./example/guess_gate_multinode_center_room/?.lua",
@@ -94,6 +96,7 @@ function Game:connect_center()
         return false
     end
     self.center_fd = fd
+    print(string.format("[%s] connect center %s:%d success, fd=%d", self.pid, self.cfg.center_host, self.cfg.center_port, fd))
     return true
 end
 
@@ -102,6 +105,7 @@ function Game:close_center()
         socket.close(self.center_fd)
     end
     self.center_fd = 0
+    print(string.format("[%s] close center fd=%d", self.pid, self.center_fd))
 end
 
 function Game:connect_room(room_addr)
@@ -116,6 +120,7 @@ function Game:connect_room(room_addr)
         return false
     end
     self.room_fd = fd
+    print(string.format("[%s] connect room %s:%d success, fd=%d", self.pid, host, port, fd))
     return true
 end
 
@@ -124,12 +129,13 @@ function Game:close_room()
         socket.close(self.room_fd)
     end
     self.room_fd = 0
+    print(string.format("[%s] close room fd=%d", self.pid, self.room_fd))
 end
 
-function Game:recv(fd, from_tag)
+function Game:recv(fd)
     local name, req, err = read_and_decode(fd)
     if not name then
-        return nil, nil, err or (from_tag .. " read failed")
+        return nil, nil, err
     end
     return name, req, nil
 end
@@ -159,7 +165,7 @@ end
 
 function Game:S2CMatchOk(r)
     self.room_addr = trim(r.room_addr)
-    self.room_id = trim(r.room_id)
+    self.room_id = r.room_id
     print("[", self.pid, "] match_ok", self.room_addr, self.room_id)
     self.stage = "room"
 end
@@ -189,7 +195,7 @@ function Game:enter_center()
         return false
     end
 
-    local name, req = self:recv(self.center_fd, nil, "center")
+    local name, req = self:recv(self.center_fd)
     if not name then
         print("[", self.pid, "] center welcome timeout")
         self:close_center()
@@ -231,7 +237,7 @@ function Game:run()
 
     while self.stage ~= "done" do
         if self.stage == "center" then
-            local name, req = self:recv(self.center_fd, "center")
+            local name, req = self:recv(self.center_fd)
             if not name then
                 print("[", self.pid, "] center read timeout/closed")
                 self.stage = "done"
@@ -245,7 +251,7 @@ function Game:run()
                 end
             end
         elseif self.stage == "room" then
-            local name, req = self:recv(self.room_fd, "room")
+            local name, req = self:recv(self.room_fd)
             if not name then
                 self.stage = "done"
             else

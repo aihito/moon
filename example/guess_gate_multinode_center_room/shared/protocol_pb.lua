@@ -50,7 +50,12 @@ function M.encode(name, tbl)
     if not name then
         return nil
     end
-    return pb.encode(name, tbl or {})
+    local ok, msg = xpcall(pb.encode, debug.traceback, name, tbl or {})
+    if not ok then
+        print(string.format("[protocol_pb] encode failed: name=%s tbl=%s error=%s", name, tbl or "nil", msg))
+        return nil
+    end
+    return msg
 end
 
 --- 解码消息：cmd_id 或 name + payload -> name, tbl
@@ -62,7 +67,12 @@ function M.decode(name_or_id, payload)
     if not name or not payload then
         return nil
     end
-    return name, pb.decode(name, payload)
+    local ok, msg = xpcall(pb.decode, debug.traceback, name, payload)
+    if not ok then
+        print(string.format("[protocol_pb] decode failed: name=%s payload=%s error=%s", name, payload, msg))
+        return nil
+    end
+    return name, msg
 end
 
 --- 写一帧到 fd：msg_name (string), data (table)
