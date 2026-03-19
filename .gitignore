@@ -25,4 +25,5 @@ ext/
 clib/
 lualib/ext/
 example/ext/
+.cache/
 
