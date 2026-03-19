@@ -45,7 +45,7 @@ end
 local command = {}
 
 --- 在 room_gate 本线程内启动 Room 端口监听与 accept，保证 fd 同线程，避免 EOF。
-function command.start_room_listen(host, port)
+function command.start(host, port)
     if listenfd_room and listenfd_room > 0 then
         return
     end
@@ -97,6 +97,7 @@ function command.shutdown()
         socket.close(listenfd_room)
         listenfd_room = 0
     end
+    moon.quit()
 end
 
 moon.dispatch("lua", function(sender, session, cmd, ...)

@@ -16,11 +16,9 @@ if _G["__init__"] then
         }, ";")
 
     }
-    
 end
 
 local moon = require("moon")
-local socket = require("moon.socket")
 
 -- 多线程共享：加载 protobuf 协议（仅一次），供各 service 使用
 local function load_protocol()
@@ -65,17 +63,13 @@ end
 
 local host = "0.0.0.0"
 local port = tonumber(os.getenv("CENTER_PORT") or "13001")
-local room_port = tonumber(os.getenv("CENTER_ROOM_PORT") or "13005")  -- Room 节点主动连此端口
+local room_port = tonumber(os.getenv("CENTER_ROOM_PORT") or "13005") -- Room 节点主动连此端口
 
 local services = {
-    { unique = true, name = "center", file = "center/match_service.lua", threadid = 2 },
-    { unique = true, name = "bridge", file = "center/bridge_service.lua", threadid = 3 },
+    { unique = true, name = "match",     file = "center/match_service.lua",     threadid = 2 },
+    { unique = true, name = "bridge",    file = "center/bridge_service.lua",    threadid = 3 },
     { unique = true, name = "room_gate", file = "center/room_gate_service.lua", threadid = 4 },
 }
-
-local listenfd_ref = {}
-
-print("cwd =", os.getenv("PWD"))
 
 moon.async(function()
     for _, one in ipairs(services) do
@@ -86,57 +80,36 @@ moon.async(function()
         end
     end
 
-    local listenfd = socket.listen(host, port, moon.PTYPE_SOCKET_TCP)
-    if listenfd == 0 then
-        moon.exit(-1)
-        return
-    end
-    listenfd_ref.fd = listenfd
-
-    print("center_node: listen", host, port, "(game servers connect here)")
-
     local bridge_id = moon.queryservice("bridge")
     local room_gate_id = moon.queryservice("room_gate")
-    -- Room 端口在 room_gate 内 listen+accept，保证 fd 同线程，避免 Center->Room RPC 读回 EOF
-    moon.send("lua", room_gate_id, "start_room_listen", host, room_port)
+
+    moon.send("lua", room_gate_id, "start", host, room_port)
+    moon.send("lua", bridge_id, "start", host, port)
 
     while true do
-        local fd, err = socket.accept(listenfd, bridge_id)
-        if not fd then
-            if listenfd_ref.shutdown then break end
-            print("center_node accept error:", err)
-        else
-            moon.send("lua", bridge_id, "add_fd", fd)
-        end
+        moon.sleep(1000)
     end
 end)
 
 moon.shutdown(function()
-    listenfd_ref.shutdown = true
-    if listenfd_ref.fd and listenfd_ref.fd > 0 then
-        socket.close(listenfd_ref.fd)
-        listenfd_ref.fd = 0
-    end
-    local room_gate_id = moon.queryservice("room_gate")
-    if room_gate_id and room_gate_id > 0 then
-        moon.send("lua", room_gate_id, "shutdown")
-    end
     moon.async(function()
-        local center_id = moon.queryservice("center")
-        if center_id and center_id > 0 then
-            moon.send("lua", center_id, "shutdown")
+        local match_id = moon.queryservice("match")
+        if match_id and match_id > 0 then
+            moon.send("lua", match_id, "shutdown")
         end
         local bridge_id = moon.queryservice("bridge")
         if bridge_id and bridge_id > 0 then
-            moon.kill(bridge_id)
+            moon.send("lua", bridge_id, "shutdown")
         end
         local room_gate_id = moon.queryservice("room_gate")
         if room_gate_id and room_gate_id > 0 then
-            moon.kill(room_gate_id)
+            moon.send("lua", room_gate_id, "shutdown")
         end
         while true do
             local size = moon.server_stats("service.count")
-            if size == 1 then break end
+            if size == 1 then
+                break
+            end
             moon.sleep(200)
         end
         moon.quit()

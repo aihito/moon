@@ -7,9 +7,12 @@ local protocol = require("shared.protocol_pb")
 local addr_center = 0
 local player_fd = {}
 local conns = {}
+local listenfd = 0
 
-local function write_downstream(fd, target, player_id, msg_name, data)
-    if not fd or not conns[fd] then return end
+local function write_downstream(fd, msg_name, data)
+    if not fd or not conns[fd] then
+        return
+    end
     protocol.write_frame(fd, msg_name, data)
 end
 
@@ -22,27 +25,31 @@ function upstream_handlers.C2SReady(req)
         player_fd[pid] = req.fd
         print("[bridge] player registered: pid=", pid, "fd=", req.fd)
     end
-    if addr_center == 0 then addr_center = moon.queryservice("center") end
+    if addr_center == 0 then addr_center = moon.queryservice("match") end
     moon.send("lua", addr_center, "ready", { player_id = pid, name = pid })
 end
 
 upstream_handlers.join_match = upstream_handlers.C2SReady
 
 function upstream_handlers.C2SGuess(req)
-    write_downstream(req.fd, "player", req.player_id, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
+    write_downstream(req.fd, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
 end
 
 local function on_upstream_frame(fd, cmd_id, payload)
     local name = protocol.CmdCode.name(cmd_id)
     if not name then
-        write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
+        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
         return
     end
+
     local ok, _msg_name, req = pcall(protocol.decode, name, payload)
     if not ok or not req then
-        write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
+        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
         return
     end
+
+    print("[bridge] recv cmd_id=", cmd_id, "name=", name, "req=", req)
+
     req.fd = fd
     if req.player_id then
         local pid = (tostring(req.player_id)):gsub("^%s+", ""):gsub("%s+$", "")
@@ -53,7 +60,7 @@ local function on_upstream_frame(fd, cmd_id, payload)
     if fn then
         fn(req)
     else
-        write_downstream(fd, "player", req.player_id or "*", "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
+        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
     end
 end
 
@@ -70,9 +77,13 @@ local function start_read_loop(fd)
                 print("[bridge] read failed, closing fd=", fd, "err=", payload_or_err)
                 conns[fd] = nil
                 for pid, f in pairs(player_fd) do
-                    if f == fd then player_fd[pid] = nil end
+                    if f == fd then
+                        player_fd[pid] = nil
+                    end
                 end
-                if fd > 0 then socket.close(fd) end
+                if fd > 0 then
+                    socket.close(fd)
+                end
                 return
             end
             on_upstream_frame(fd, cmd_id, payload_or_err)
@@ -83,17 +94,38 @@ end
 
 local command = {}
 
+function command.start(host, port)
+    if listenfd and listenfd > 0 then
+        return
+    end
+
+    listenfd = socket.listen(host, port, moon.PTYPE_SOCKET_TCP)
+    if listenfd == 0 then
+        print("[bridge] center listen failed", host, port)
+        return
+    end
+
+    print("[bridge] center_node: listen", host, port, "(game servers connect here)")
+
+    moon.async(function()
+        while listenfd and listenfd > 0 do
+            local fd, err = socket.accept(listenfd, moon.id)
+            if not fd then
+                print("[bridge] center accept error:", err)
+            else
+                command.add_fd(fd)
+            end
+        end
+    end)
+end
+
 function command.add_fd(fd)
     conns[fd] = true
     if addr_center == 0 then
-        addr_center = moon.queryservice("center")
+        addr_center = moon.queryservice("match")
     end
-    write_downstream(fd, "player", "*", "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
-    -- 首包读也用 timeout，避免阻塞 worker（没有首包就进入 read_loop 继续处理）
-    local cmd_id, payload = protocol.read_frame(fd)
-    if cmd_id then
-        on_upstream_frame(fd, cmd_id, payload)
-    end
+    print("[bridge] add_fd fd=", fd)
+    write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
     start_read_loop(fd)
 end
 
@@ -124,17 +156,34 @@ function command.forward_broadcast(player_ids, _session_id, msg_name, data)
     end
 end
 
-function command.register_room(_tbl) end
-function command.unregister_room(_player_ids) end
-
-moon.dispatch("lua", function(sender, session, cmd, ...)
-    local fn = command[cmd]
-    if fn then
-        fn(...)
-        if session and session > 0 then
-            moon.response("lua", sender, session, true)
-        end
-    else
-        moon.error("bridge unknown command", cmd, ...)
+function command.shutdown()
+    if listenfd and listenfd > 0 then
+        socket.close(listenfd)
+        listenfd = 0
     end
-end)
+    for fd, _ in pairs(conns) do
+        if fd and fd > 0 then
+            socket.close(fd)
+        end
+        conns[fd] = nil
+    end
+    for pid, _ in pairs(player_fd) do
+        player_fd[pid] = nil
+    end
+    moon.quit()
+end
+
+moon.dispatch(
+    "lua",
+    function(sender, session, cmd, ...)
+        local fn = command[cmd]
+        if fn then
+            fn(...)
+            if session and session > 0 then
+                moon.response("lua", sender, session, true)
+            end
+        else
+            moon.error("bridge unknown command", cmd, ...)
+        end
+    end
+)

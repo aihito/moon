@@ -55,112 +55,216 @@ local CFG = {
 
 local player_id = os.getenv("SIM_PLAYER") or (arg and arg[1]) or "alice"
 
---- 阶段1：连 Center，自动 ready，读 S2CNotify / S2CMatchOk，返回 room_addr, room_id 或 nil,nil
-local function match_phase()
-    local cf = socket.connect(CFG.center_host, CFG.center_port, moon.PTYPE_SOCKET_TCP, CFG.room_connect_timeout_ms)
-    if not cf or cf <= 0 then
-        print("[", player_id, "] connect center failed")
-        return nil, nil
-    end
-
-    local cmd_id, payload = protocol.read_frame(cf, 5000)
-    if not cmd_id then
-        print("[", player_id, "] center welcome timeout")
-        socket.close(cf)
-        return nil, nil
-    end
-    local name, req = protocol.decode(cmd_id, payload)
-    if name == "S2CNotify" then
-        print("[Center->", player_id, "]", req.text or "", "reason=", req.reason or "")
-    end
-
-    -- 客户端处理协议后只发一次 ready，等待 Center 返回 S2CMatchOk 后再进入 Room 阶段。
-    -- 不再周期 ping，避免造成 match 阶段重复 ready / 重复入队刷日志。
-    protocol.write_frame(cf, "C2SReady", { player_id = player_id })
-    moon.sleep(80)
-
-    local match_done = { v = false }
-
-    local room_addr, room_id
-    while true do
-        cmd_id, payload = protocol.read_frame(cf, CFG.match_timeout_ms)
-        if not cmd_id then
-            print("[", player_id, "] center read timeout/closed")
-            break
-        end
-        name, req = protocol.decode(cmd_id, payload)
-        if name == "S2CNotify" then
-            print("[Center->", player_id, "]", req.text or "", "reason=", req.reason or "")
-            if req.reason == "NOTIFY_REASON_CREATE_ROOM_FAILED" then
-                match_done.v = true
-                break
-            end
-        elseif name == "S2CMatchOk" then
-            match_done.v = true
-            room_addr = (tostring(req.room_addr or "")):gsub("^%s+", ""):gsub("%s+$", "")
-            room_id = (tostring(req.room_id or "")):gsub("^%s+", ""):gsub("%s+$", "")
-            print("[", player_id, "] match_ok", room_addr, room_id)
-            break
-        end
-    end
-    socket.close(cf)
-    return room_addr, room_id
+local function trim(s)
+    return (tostring(s or "")):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
---- 阶段2：连 Room，发 C2SAttachRoom，读 S2CNotify / S2CGuessRange / S2CGameOver，猜数
-local function room_phase(room_addr, room_id)
-    room_addr = (room_addr or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    room_id = (room_id or ""):gsub("^%s+", ""):gsub("%s+$", "")
+local function read_and_decode(fd)
+    local cmd_id, payload = protocol.read_frame(fd)
+    if not cmd_id then
+        return nil, nil, payload
+    end
+    local name, req = protocol.decode(cmd_id, payload)
+    return name, req, nil
+end
+
+local Game = {}
+Game.__index = Game
+
+function Game.new(cfg, pid)
+    return setmetatable({
+        cfg = cfg,
+        pid = pid,
+        center_fd = 0,
+        room_fd = 0,
+        room_addr = nil,
+        room_id = nil,
+        min_guess = 1,
+        max_guess = 100,
+        last_lo = nil,
+        last_hi = nil,
+        stage = "center", -- center -> room -> done
+    }, Game)
+end
+
+function Game:connect_center()
+    local fd = socket.connect(self.cfg.center_host, self.cfg.center_port, moon.PTYPE_SOCKET_TCP, self.cfg.room_connect_timeout_ms)
+    if not fd or fd <= 0 then
+        print("[", self.pid, "] connect center failed")
+        return false
+    end
+    self.center_fd = fd
+    return true
+end
+
+function Game:close_center()
+    if self.center_fd and self.center_fd > 0 then
+        socket.close(self.center_fd)
+    end
+    self.center_fd = 0
+end
+
+function Game:connect_room(room_addr)
+    room_addr = trim(room_addr)
     local host, port = room_addr:match("^([^:]+):(%d+)$")
     if not host then host, port = room_addr, "13002" end
     port = tonumber(port) or 13002
 
-    local rf = socket.connect(host, port, moon.PTYPE_SOCKET_TCP, CFG.room_connect_timeout_ms)
-    if not rf or rf <= 0 then
-        print("[", player_id, "] connect room failed")
-        return
+    local fd = socket.connect(host, port, moon.PTYPE_SOCKET_TCP, self.cfg.room_connect_timeout_ms)
+    if not fd or fd <= 0 then
+        print("[", self.pid, "] connect room failed")
+        return false
     end
-    protocol.write_frame(rf, "C2SAttachRoom", { room_id = room_id, player_ids = { player_id } })
-    print("[", player_id, "] attached room, guessing...")
+    self.room_fd = fd
+    return true
+end
 
-    local min_guess, max_guess = 1, 100
-    local last_lo, last_hi = nil, nil
-    while true do
-        local cid, pay = protocol.read_frame(rf, 10000)
-        if not cid then break end
-        local msg_name, req = protocol.decode(cid, pay)
-        if msg_name == "S2CNotify" then
-            print("[Room->", player_id, "]", req.text or "", "reason=", req.reason or "")
-            if req.reason == "NOTIFY_REASON_PLAYER_LEFT" or req.reason == "NOTIFY_REASON_GUESS_SUCCESS" then
-                break
-            end
-        elseif msg_name == "S2CGuessRange" then
-            if req.lo and req.hi then
-                min_guess, max_guess = req.lo, req.hi
-                if min_guess < max_guess and (last_lo ~= min_guess or last_hi ~= max_guess) then
-                    last_lo, last_hi = min_guess, max_guess
-                    local num = math.floor((min_guess + max_guess) / 2)
-                    protocol.write_frame(rf, "C2SGuess", { room_id = room_id, player_id = player_id, number = num })
-                    moon.sleep(1000)
-                end
-            end
-        elseif msg_name == "S2CGameOver" then
-            print("[Room->", player_id, "] game_over", req.result, req.answer or "")
-            break
+function Game:close_room()
+    if self.room_fd and self.room_fd > 0 then
+        socket.close(self.room_fd)
+    end
+    self.room_fd = 0
+end
+
+function Game:recv(fd, from_tag)
+    local name, req, err = read_and_decode(fd)
+    if not name then
+        return nil, nil, err or (from_tag .. " read failed")
+    end
+    return name, req, nil
+end
+
+function Game:dispatch(map, name, req)
+    local fn = map[name]
+    if fn then
+        return fn(self, req)
+    end
+    return nil
+end
+
+-- ---------- Message handlers (same name as protocol) ----------
+function Game:S2CNotify(r)
+    if self.stage == "center" then
+        print("[Center->", self.pid, "]", r.text or "", "reason=", r.reason or "")
+        if r.reason == "NOTIFY_REASON_CREATE_ROOM_FAILED" then
+            self.stage = "done"
+        end
+    else
+        print("[Room->", self.pid, "]", r.text or "", "reason=", r.reason or "")
+        if r.reason == "NOTIFY_REASON_PLAYER_LEFT" or r.reason == "NOTIFY_REASON_GUESS_SUCCESS" then
+            self.stage = "done"
         end
     end
-    socket.close(rf)
-    print("[", player_id, "] done")
+end
+
+function Game:S2CMatchOk(r)
+    self.room_addr = trim(r.room_addr)
+    self.room_id = trim(r.room_id)
+    print("[", self.pid, "] match_ok", self.room_addr, self.room_id)
+    self.stage = "room"
+end
+
+function Game:S2CGuessRange(r)
+    if not (r.lo and r.hi) then
+        return
+    end
+    self.min_guess, self.max_guess = r.lo, r.hi
+    if self.min_guess < self.max_guess and (self.last_lo ~= self.min_guess or self.last_hi ~= self.max_guess) then
+        self.last_lo, self.last_hi = self.min_guess, self.max_guess
+        local num = math.floor((self.min_guess + self.max_guess) / 2)
+        protocol.write_frame(self.room_fd, "C2SGuess", { room_id = self.room_id, player_id = self.pid, number = num })
+        moon.sleep(1000)
+    end
+end
+
+function Game:S2CGameOver(r)
+    print("[Room->", self.pid, "] game_over", r.result, r.answer or "")
+    self.stage = "done"
+end
+
+function Game:enter_center()
+    self.stage = "center"
+    if not self:connect_center() then
+        self.stage = "done"
+        return false
+    end
+
+    local name, req = self:recv(self.center_fd, nil, "center")
+    if not name then
+        print("[", self.pid, "] center welcome timeout")
+        self:close_center()
+        self.stage = "done"
+        return false
+    end
+    self:dispatch(self._handlers, name, req)
+
+    protocol.write_frame(self.center_fd, "C2SReady", { player_id = self.pid })
+    moon.sleep(80)
+    return true
+end
+
+function Game:enter_room()
+    if not (self.room_addr and self.room_id) then
+        self.stage = "done"
+        return false
+    end
+    if not self:connect_room(self.room_addr) then
+        self.stage = "done"
+        return false
+    end
+    protocol.write_frame(self.room_fd, "C2SAttachRoom", { room_id = self.room_id, player_ids = { self.pid } })
+    print("[", self.pid, "] attached room, guessing...")
+    return true
+end
+
+function Game:run()
+    self._handlers = {
+        S2CNotify = Game.S2CNotify,
+        S2CMatchOk = Game.S2CMatchOk,
+        S2CGuessRange = Game.S2CGuessRange,
+        S2CGameOver = Game.S2CGameOver,
+    }
+
+    if not self:enter_center() then
+        return false
+    end
+
+    while self.stage ~= "done" do
+        if self.stage == "center" then
+            local name, req = self:recv(self.center_fd, "center")
+            if not name then
+                print("[", self.pid, "] center read timeout/closed")
+                self.stage = "done"
+            else
+                self:dispatch(self._handlers, name, req)
+                if self.stage == "room" then
+                    self:close_center()
+                    if not self:enter_room() then
+                        self.stage = "done"
+                    end
+                end
+            end
+        elseif self.stage == "room" then
+            local name, req = self:recv(self.room_fd, "room")
+            if not name then
+                self.stage = "done"
+            else
+                self:dispatch(self._handlers, name, req)
+            end
+        else
+            self.stage = "done"
+        end
+    end
+
+    self:close_center()
+    self:close_room()
+    print("[", self.pid, "] done")
+    return true
 end
 
 moon.async(function()
     print("Sim (single): player=", player_id, "| Center:", CFG.center_host .. ":" .. CFG.center_port)
-    local room_addr, room_id = match_phase()
-    if not room_addr or not room_id then
-        print("[", player_id, "] no match_ok, exit")
-        moon.quit()
-        return
-    end
-    room_phase(room_addr, room_id)
+    local game = Game.new(CFG, player_id)
+    game:run()
     moon.quit()
 end)

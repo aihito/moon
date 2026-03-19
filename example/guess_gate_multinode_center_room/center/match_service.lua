@@ -116,8 +116,12 @@ function command.shutdown()
 end
 
 moon.dispatch("lua", function(sender, session, cmd, ...)
-    if addr_bridge == 0 then addr_bridge = moon.queryservice("bridge") end
-    if addr_room_gate == 0 then addr_room_gate = moon.queryservice("room_gate") end
+    if addr_bridge == 0 then
+        addr_bridge = moon.queryservice("bridge")
+    end
+    if addr_room_gate == 0 then
+        addr_room_gate = moon.queryservice("room_gate")
+    end
     local fn = command[cmd]
     if fn then
         moon.response("lua", sender, session, fn(...))

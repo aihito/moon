@@ -47,7 +47,9 @@ function M.encode(name, tbl)
     if type(name) == "number" then
         name = CmdCode.name(name)
     end
-    if not name then return nil end
+    if not name then
+        return nil
+    end
     return pb.encode(name, tbl or {})
 end
 
@@ -57,14 +59,18 @@ function M.decode(name_or_id, payload)
     if type(name_or_id) == "number" then
         name = CmdCode.name(name_or_id)
     end
-    if not name or not payload then return nil end
+    if not name or not payload then
+        return nil
+    end
     return name, pb.decode(name, payload)
 end
 
 --- 写一帧到 fd：msg_name (string), data (table)
 function M.write_frame(fd, msg_name, data)
     local cid = CmdCode[msg_name]
-    if not cid then return false end
+    if not cid then
+        return false
+    end
     local payload = M.encode(msg_name, data)
     local frame = M.pack_frame(cid, payload)
     return socket.write(fd, frame)
