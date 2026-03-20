@@ -6,128 +6,170 @@ local protocol = require("shared.protocol_pb")
 
 local ROOM_GAME_HOST = "0.0.0.0"
 local ROOM_GAME_PORT = tonumber(os.getenv("ROOM_GAME_PORT") or "13002")
+local ROOM_GAME_ADDR = os.getenv("ROOM_GAME_ADDR") or ("127.0.0.1:" .. tostring(ROOM_GAME_PORT))
 --- Room 主动连 Center 的地址（建立长连接，收 create_room 请求）
 local CENTER_HOST = os.getenv("CENTER_HOST") or "127.0.0.1"
 local CENTER_ROOM_PORT = tonumber(os.getenv("CENTER_ROOM_PORT") or "13005")
 
---- room_id -> room_service_id
-local rooms = {}
---- fd -> { [room_id] = true }, set of rooms this connection is in
-local fd_rooms = {}
+local rooms = {} -- room_id -> { service_id = room_service_id, players = { player_id... } }
+local player_route = {}
 local stopping = false
 local center_fd = 0
 
---- 下行写回：room_service 调用 write_fd(fd, msg_name, data)，此处组帧并写出。
-local function write_fd_binary(fd, msg_name, data)
-    if not fd or fd <= 0 then return end
-    protocol.write_frame(fd, msg_name, data)
+local function write_fd_binary(fd, player_id, msg_name, data)
+    data = data or {}
+
+    local inner_cmd_id = protocol.cmd_id(msg_name)
+    if not inner_cmd_id then
+        return
+    end
+
+    local inner_payload = protocol.encode(msg_name, data)
+    if not inner_payload then
+        return
+    end
+
+    protocol.write_frame(
+        fd,
+        "GamePacket",
+        {
+            player_id = tostring(player_id or ""),
+            inner_cmd_id = inner_cmd_id,
+            inner_payload = inner_payload,
+        }
+    )
 end
 
-local function trim(s)
-    return (tostring(s or "")):gsub("^%s+", ""):gsub("%s+$", "")
+local function write_player_msg(player_id, msg_name, data)
+    data = data or {}
+
+    if not player_id or player_id == "" then
+        return
+    end
+
+    local fd = player_route[player_id]
+    if not fd or fd <= 0 then
+        return
+    end
+
+    write_fd_binary(fd, player_id, msg_name, data)
+end
+
+local function write_room_msg(room_id, msg_name, data)
+    data = data or {}
+
+    if not room_id or room_id == 0 then
+        return
+    end
+
+    local players = rooms[room_id].players
+    if not players or #players == 0 then
+        return
+    end
+
+    for _, player_id in ipairs(players) do
+        write_player_msg(player_id, msg_name, data)
+    end
 end
 
 local function decode_frame(fd, cmd_id, payload)
     local name = protocol.CmdCode.name(cmd_id)
     if not name then
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
-        return nil, nil
+        write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
+        return nil
     end
-    local ok, _msg_name, req = pcall(protocol.decode, name, payload)
-    if not ok or not req then
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
-        return nil, nil
+
+    if name ~= "GamePacket" then
+        print(string.format("[room_manager] decode_frame: unknown message type: %s", name))
+        return nil
     end
-    return name, req
+
+    local ok, _outer_name, wrapper = pcall(protocol.decode, name, payload)
+    if not ok or not wrapper then
+        write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误(GamePacket)" })
+        return nil
+    end
+
+    local inner_name, inner_req = protocol.decode(wrapper.inner_cmd_id, wrapper.inner_payload)
+    if not inner_name or not inner_req then
+        write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误(inner)" })
+        return nil
+    end
+
+    return wrapper, inner_name, inner_req
 end
 
 -- ---------- Upstream message handlers (naming style: same as protocol) ----------
 local upstream_handlers = {}
 
-function upstream_handlers.C2SAttachRoom(ctx, req)
+function upstream_handlers.EnterRoom(ctx, req)
     local fd = ctx.fd
     local room_id = req.room_id
-    local player_ids = req.player_ids or {}
-    if not room_id or room_id == 0 or #player_ids == 0 then
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_BAD_ATTACH_ROOM", text = "attach_room 需要 room_id 和 player_ids" })
+    local player_info = req.player_info or {}
+    local player_id = player_info.player_id or req.player_id
+
+    if not room_id or room_id == 0 or not player_id or player_id == "" then
+        write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_BAD_ATTACH_ROOM", text = "EnterRoom 需要 room_id 和 player_info.player_id" })
         return
     end
-    local room_sid = rooms[room_id]
-    if not room_sid or room_sid == 0 then
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_ROOM_NOT_FOUND", text = "房间不存在: " .. room_id })
+
+    local room = rooms[room_id]
+    if not room then
+        write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_ROOM_NOT_FOUND", text = "房间不存在: " .. room_id })
         return
     end
-    moon.send("lua", room_sid, "add_conn", fd, player_ids)
-    fd_rooms[fd] = fd_rooms[fd] or {}
-    fd_rooms[fd][room_id] = true
+
+    player_route[player_id] = fd
+
+    moon.send("lua", room.service_id, "enter_room", player_id)
 end
 
-function upstream_handlers.C2SGuess(ctx, req)
-    local fd = ctx.fd
-    local rid = req.room_id
-    local pid = trim(req.player_id)
-    local num = req.number and math.tointeger(req.number)
-    if rid == "" or not num then
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_BAD_GUESS", text = "C2SGuess 需要 room_id 和 number" })
-        return
-    end
-    local room_sid = rooms[rid]
-    if room_sid and room_sid > 0 then
-        moon.send("lua", room_sid, "on_msg", fd, pid, "C2SGuess", { number = num })
-    else
-        write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_ROOM_NOT_FOUND", text = "房间不存在: " .. rid })
-    end
-end
+
 
 local function on_upstream_frame(fd, cmd_id, payload)
-    local name, req = decode_frame(fd, cmd_id, payload)
-    if not name then
+    local route, name, req = decode_frame(fd, cmd_id, payload)
+    if not route then
         return
     end
     local fn = upstream_handlers[name]
     if fn then
         fn({ fd = fd }, req)
         return
+    elseif route.room_id and route.room_id > 0 then
+        local room = rooms[route.room_id]
+        if room then
+            moon.send("lua", room.service_id, "on_msg", name, req)
+            return
+        end
     end
-    write_fd_binary(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
+    write_fd_binary(fd, 0, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
 end
 
---- Per-connection read loop: 二进制帧
 local function read_loop(fd)
     moon.async(function()
-        fd_rooms[fd] = fd_rooms[fd] or {}
         while true do
-            if stopping then break end
+            if stopping then
+                break
+            end
             local cmd_id, payload = protocol.read_frame(fd)
             if not cmd_id then
                 break
             end
             on_upstream_frame(fd, cmd_id, payload)
         end
-
-        for room_id, _ in pairs(fd_rooms[fd] or {}) do
-            local room_sid = rooms[room_id]
-            if room_sid and room_sid > 0 then
-                moon.send("lua", room_sid, "conn_closed", fd)
-            end
-        end
-        fd_rooms[fd] = nil
         socket.close(fd)
     end)
 end
 
---- Advertised address for clients to connect (Center forwards this in match_ok).
-local ROOM_GAME_ADDR = os.getenv("ROOM_GAME_ADDR") or ("127.0.0.1:" .. tostring(ROOM_GAME_PORT))
-
 local center_handlers = {}
 
-function center_handlers.RoomCreateRoomReq(ctx, req)
+function center_handlers.CreateRoomReq(ctx, req)
     local fd = ctx.fd
     local room = req.room or {}
     local room_id = room.room_id
     local players = room.players or {}
     if #players == 0 then
-        protocol.write_frame(fd, "RoomCreateRoomResp", {
+        protocol.write_frame(fd, "CreateRoomResp", {
             req_id = req.req_id,
             ok = false,
             err = "bad_args",
@@ -138,7 +180,7 @@ function center_handlers.RoomCreateRoomReq(ctx, req)
     print("[room_manager] create_room(req)", room_id, table.concat(players, ","))
     local room_service_id = moon.new_service({ file = "room/room_service.lua" })
     if not room_service_id or room_service_id == 0 then
-        protocol.write_frame(fd, "RoomCreateRoomResp", {
+        protocol.write_frame(fd, "CreateRoomResp", {
             req_id = req.req_id,
             ok = false,
             err = "create_service_failed",
@@ -147,8 +189,11 @@ function center_handlers.RoomCreateRoomReq(ctx, req)
         return
     end
     moon.send("lua", room_service_id, "init", moon.id, room_id, table.unpack(players))
-    rooms[room_id] = room_service_id
-    protocol.write_frame(fd, "RoomCreateRoomResp", {
+    rooms[room_id] = {
+        service_id = room_service_id,
+        players = players,
+    }
+    protocol.write_frame(fd, "CreateRoomResp", {
         req_id = req.req_id,
         ok = true,
         err = "",
@@ -268,15 +313,23 @@ function command.shutdown()
     moon.quit()
 end
 
-function command.write_fd(fd, msg_name, data)
-    if fd and fd > 0 and msg_name then
-        write_fd_binary(fd, msg_name, data or {})
+function command.write_player(room_id, player_id, msg_name, data)
+    if not (room_id and player_id and msg_name) then
+        return
     end
+    write_player_msg(player_id, msg_name, data)
 end
 
-function command.room_closed(rid)
-    if rid then
-        rooms[rid] = nil
+function command.room_closed(room_id)
+    if room_id then
+        local room = rooms[room_id]
+        if room then
+            for _, player_id in ipairs(room.players) do
+                player_route[player_id] = nil
+            end
+        end
+        rooms[room_id] = nil
+        print(string.format("[room_manager] room_closed: %d", room_id))
     end
 end
 

@@ -12,7 +12,7 @@ local addr_bridge = 0
 local addr_room_gate = 0
 
 local function send_to_player(player_id, msg_name, data)
-    print(string.format("[match] send to player: player_id=%s msg_name=%s data=%s", player_id, msg_name, data or "nil"))
+    -- print(string.format("[match] send to player: player_id=%s msg_name=%s data=%s", player_id, msg_name, data or "nil"))
     moon.send("lua", addr_bridge, "forward", "player", player_id, nil, msg_name, data or {})
 end
 
@@ -97,7 +97,7 @@ function command.ready(player)
         return
     end
 
-    -- send_to_player(player.player_id, "S2CNotify", { reason = "NOTIFY_REASON_JOIN_QUEUE", text = "已加入匹配队列" })
+    send_to_player(player.player_id, "S2CNotify", { reason = "NOTIFY_REASON_JOIN_QUEUE", text = "已加入匹配队列" })
 
     if not in_queue[player.player_id] then -- 仅首次 ready 入队并 try_match，重复 ready（如客户端 ping）不再入队
         print("[match] player not in queue", player.player_id)

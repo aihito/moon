@@ -67,7 +67,38 @@ local function read_and_decode(fd)
         return nil, nil, payload
     end
     local name, req = protocol.decode(cmd_id, payload)
+    if name == "GamePacket" and req then
+        local inner_name, inner_req = protocol.decode(req.inner_cmd_id, req.inner_payload)
+        if inner_req and req.player_id and req.player_id ~= "" then
+            -- 兜底：让 handler 可以统一通过 player_id 处理（即使 inner message 没有该字段）
+            if not inner_req.player_id or inner_req.player_id == "" then
+                inner_req.player_id = req.player_id
+            end
+            if inner_req.player_info then
+                inner_req.player_info.player_id = inner_req.player_info.player_id or req.player_id
+            end
+        end
+        return inner_name, inner_req, nil
+    end
     return name, req, nil
+end
+
+local function write_game_packet(fd, player_id, room_id, inner_msg_name, inner_data)
+    inner_data = inner_data or {}
+    local inner_cmd_id = protocol.cmd_id(inner_msg_name)
+    if not inner_cmd_id then
+        return
+    end
+    local inner_payload = protocol.encode(inner_msg_name, inner_data)
+    if not inner_payload then
+        return
+    end
+    protocol.write_frame(fd, "GamePacket", {
+        player_id = tostring(player_id or ""),
+        room_id = room_id,
+        inner_cmd_id = inner_cmd_id,
+        inner_payload = inner_payload,
+    })
 end
 
 local Game = {}
@@ -178,7 +209,7 @@ function Game:S2CGuessRange(r)
     if self.min_guess < self.max_guess and (self.last_lo ~= self.min_guess or self.last_hi ~= self.max_guess) then
         self.last_lo, self.last_hi = self.min_guess, self.max_guess
         local num = math.floor((self.min_guess + self.max_guess) / 2)
-        protocol.write_frame(self.room_fd, "C2SGuess", { room_id = self.room_id, player_id = self.pid, number = num })
+        write_game_packet(self.room_fd, self.pid, self.room_id, "C2SGuess", { room_id = self.room_id, player_id = self.pid, number = num })
         moon.sleep(1000)
     end
 end
@@ -204,7 +235,7 @@ function Game:enter_center()
     end
     self:dispatch(self._handlers, name, req)
 
-    protocol.write_frame(self.center_fd, "C2SReady", { player_id = self.pid })
+    write_game_packet(self.center_fd, self.pid, 0, "C2SReady", { player_id = self.pid, player_name = self.pid })
     moon.sleep(80)
     return true
 end
@@ -218,7 +249,10 @@ function Game:enter_room()
         self.stage = "done"
         return false
     end
-    protocol.write_frame(self.room_fd, "C2SAttachRoom", { room_id = self.room_id, player_ids = { self.pid } })
+    write_game_packet(self.room_fd, self.pid, self.room_id, "EnterRoom", {
+        room_id = self.room_id,
+        player_info = { player_id = self.pid, player_name = self.pid },
+    })
     print("[", self.pid, "] attached room, guessing...")
     return true
 end

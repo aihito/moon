@@ -3,17 +3,19 @@
 local CmdCode = {
     -- C2S
     C2SReady = 1,
-    C2SAttachRoom = 2,
+    EnterRoom = 2,
     C2SGuess = 3,
     -- Room <-> Center RPC
     RoomNodeRegister = 11,
-    RoomCreateRoomReq = 12,
-    RoomCreateRoomResp = 13,
+    CreateRoomReq = 12,
+    CreateRoomResp = 13,
     -- S2C
     S2CNotify = 101,
     S2CMatchOk = 102,
     S2CGuessRange = 103,
     S2CGameOver = 104,
+    -- GamePacket wrapper：用于“游戏服 <-> Center/Room”
+    GamePacket = 200,
 }
 
 local id_to_name = {}

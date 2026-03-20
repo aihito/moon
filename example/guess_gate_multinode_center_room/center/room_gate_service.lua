@@ -82,7 +82,7 @@ function room_node_handlers.RoomNodeRegister(ctx, req)
     print("[room_gate] room node registered fd=", fd, "addr=", addr)
 end
 
-function room_node_handlers.RoomCreateRoomResp(ctx, req)
+function room_node_handlers.CreateRoomResp(ctx, req)
     wake_pending(req.req_id, req)
 end
 
@@ -124,7 +124,7 @@ local function do_create_room(game_type, players)
     local room_id = generate_room_id()
 
     print(string.format("[room_gate] create_room send to room node: fd=%d game_type=%d room_id=%d players=%s req_id=%d", fd, game_type, room_id, table.concat(players, ","), req_id))
-    local ok = protocol.write_frame(fd, "RoomCreateRoomReq", {
+    local ok = protocol.write_frame(fd, "CreateRoomReq", {
         req_id = req_id,
         room = {
             room_id = room_id,
@@ -135,7 +135,7 @@ local function do_create_room(game_type, players)
     if not ok then
         remove_fd(fd)
         print(string.format("[room_gate] create_room send to room node failed: fd=%d game_type=%d room_id=%d players=%s req_id=%d", fd, game_type, room_id, table.concat(players, ","), req_id))
-        return false, "send RoomCreateRoomReq failed", nil
+        return false, "send CreateRoomReq failed", nil
     end
 
     print(string.format("[room_gate] create_room waiting response: req_id=%d", req_id))
@@ -205,7 +205,6 @@ end
 --- 建房 RPC：供 match 等任意服务调用。返回 { ok = true, room_addr = "host:port" } 或 { ok = false, err = "..." }。
 function command.create_room(game_type, players)
     local ok, err, room_info = do_create_room(game_type, players)
-    print("#########", ok, err, room_info)
     if ok then
         return { ok = true, room_info = room_info }
     else
@@ -231,9 +230,6 @@ moon.dispatch("lua", function(sender, session, cmd, ...)
         if not ok then
             print(string.format("[room_gate] command %s failed: error=%s", cmd, ret))
         end
-        -- 兼容 moon.send(session=0) 与 moon.call(session>0)：
-        -- moon.response 在 session=0 时会安全忽略；避免因 session 类型/比较导致不回包而让 moon.call 卡死。
-        -- 用单元素表包裹，保证 seri 往返只反序列化出一个 table；否则 unpack 可能返回多值，moon.call 只拿到第一个（如 true）。
         moon.response("lua", sender, session, ret)
     else
         moon.error("room_gate unknown command", cmd)

@@ -26,4 +26,4 @@ clib/
 lualib/ext/
 example/ext/
 .cache/
-
+example/guess_gate_multinode_center_room/pid/

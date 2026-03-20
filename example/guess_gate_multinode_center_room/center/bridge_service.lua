@@ -9,11 +9,30 @@ local player_fd = {}
 local conns = {}
 local listenfd = 0
 
-local function write_downstream(fd, msg_name, data)
+local function write_game_packet(fd, player_id, inner_msg_name, inner_data)
+    if not fd or fd <= 0 then return end
+    local inner_cmd_id = protocol.cmd_id(inner_msg_name)
+    if not inner_cmd_id then
+        print("[bridge] write_game_packet unknown inner msg:", tostring(inner_msg_name))
+        return
+    end
+    local inner_payload = protocol.encode(inner_msg_name, inner_data or {})
+    if not inner_payload then
+        print("[bridge] write_game_packet encode failed:", tostring(inner_msg_name))
+        return
+    end
+    protocol.write_frame(fd, "GamePacket", {
+        player_id = tostring(player_id or ""),
+        inner_cmd_id = inner_cmd_id,
+        inner_payload = inner_payload,
+    })
+end
+
+local function write_downstream(fd, player_id, msg_name, data)
     if not fd or not conns[fd] then
         return
     end
-    protocol.write_frame(fd, msg_name, data)
+    write_game_packet(fd, player_id, msg_name, data)
 end
 
 local upstream_handlers = {}
@@ -21,7 +40,7 @@ local upstream_handlers = {}
 function upstream_handlers.C2SReady(req)
     req.fd = req.fd
     local pid = req.player_id
-    if not pid or pid == "" then
+    if pid and pid ~= "" then
         player_fd[pid] = req.fd
         print("[bridge] player registered: pid=", pid, "fd=", req.fd)
     end
@@ -29,23 +48,49 @@ function upstream_handlers.C2SReady(req)
 end
 
 function upstream_handlers.C2SGuess(req)
-    write_downstream(req.fd, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
+    write_downstream(req.fd, req.player_id, "S2CNotify", { reason = "NOTIFY_REASON_NEED_MATCH_FIRST", text = "请先匹配并连接房间服" })
 end
 
 local function on_upstream_frame(fd, cmd_id, payload)
     local name = protocol.CmdCode.name(cmd_id)
     if not name then
-        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
+        write_downstream(fd, "", "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_MSG_TYPE", text = "未知消息类型" })
         return
     end
 
+    if name == "GamePacket" then
+        local ok, _outer_name, wrapper = pcall(protocol.decode, name, payload)
+        if not ok or not wrapper then
+            write_downstream(fd, "", "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误(GamePacket)" })
+            return
+        end
+        local inner_name, inner_req = protocol.decode(wrapper.inner_cmd_id, wrapper.inner_payload)
+        if not inner_name or not inner_req then
+            write_downstream(fd, wrapper.player_id, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误(inner)" })
+            return
+        end
+
+        -- 给 handler 统一补一个 player_id（有的 inner message 可能没有该字段）
+        inner_req.fd = fd
+        if wrapper.player_id and wrapper.player_id ~= "" and (not inner_req.player_id or inner_req.player_id == "") then
+            inner_req.player_id = wrapper.player_id
+        end
+
+        local fn = upstream_handlers[inner_name]
+        if fn then
+            fn(inner_req)
+        else
+            write_downstream(fd, wrapper.player_id, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. inner_name })
+        end
+        return
+    end
+
+    -- 兼容：如果客户端仍在发旧协议（不使用 GamePacket），就按旧逻辑处理
     local ok, _msg_name, req = pcall(protocol.decode, name, payload)
     if not ok or not req then
-        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
+        write_downstream(fd, "", "S2CNotify", { reason = "NOTIFY_REASON_DECODE_ERROR", text = "协议解析错误" })
         return
     end
-
-    -- print("[bridge] recv cmd_id=", cmd_id, "name=", name, "req=", req)
 
     req.fd = fd
     if req.player_id then
@@ -56,7 +101,7 @@ local function on_upstream_frame(fd, cmd_id, payload)
     if fn then
         fn(req)
     else
-        write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
+        write_downstream(fd, req.player_id, "S2CNotify", { reason = "NOTIFY_REASON_UNKNOWN_CMD", text = "未知命令: " .. name })
     end
 end
 
@@ -124,7 +169,7 @@ end
 function command.add_fd(fd)
     conns[fd] = true
     print("[bridge] add_fd fd=", fd)
-    write_downstream(fd, "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
+    write_downstream(fd, "", "S2CNotify", { reason = "NOTIFY_REASON_WELCOME", text = "欢迎，客户端将自动 ready；匹配成功后请连接房间服" })
     start_read_loop(fd)
 end
 
@@ -132,7 +177,7 @@ function command.forward(target, player_id, _session_id, msg_name, data)
     local fd = player_fd[player_id]
     print(string.format("[bridge] forward to player: fd=%d player_id=%s msg_name=%s data=%s", fd, player_id, msg_name, print_r(data, true)))
     if fd and conns[fd] then
-        local ok = protocol.write_frame(fd, msg_name, data or {})
+        write_downstream(fd, player_id, msg_name, data or {})
     end
 end
 
@@ -140,7 +185,7 @@ function command.forward_broadcast(player_ids, _session_id, msg_name, data)
     for _, pid in ipairs(player_ids) do
         local fd = player_fd[pid]
         if fd and conns[fd] then
-            protocol.write_frame(fd, msg_name, data)
+            write_downstream(fd, pid, msg_name, data)
         end
     end
 end
