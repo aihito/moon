@@ -10,17 +10,12 @@ class time
 {
   using time_point = std::chrono::time_point<std::chrono::steady_clock>;
   inline static const time_point start_time_point_ = std::chrono::steady_clock::now();
-  inline static std::time_t start_milliseconds =
-    std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()
-    )
-      .count();
+  inline static std::time_t start_milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
   inline static std::time_t offset_ = 0;
 public:
   static double clock()
   {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_point_)
-      .count();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_point_).count();
   }
 
   static bool offset(std::time_t v)
@@ -39,9 +34,7 @@ public:
 
   static std::time_t now()
   {
-    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - start_time_point_
-    );
+    auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start_time_point_);
     return start_milliseconds + diff.count() + offset_;
   }
 
@@ -147,9 +140,7 @@ public:
 
 inline bool operator==(const std::tm& tm1, const std::tm& tm2)
 {
-  return (
-    tm1.tm_sec == tm2.tm_sec && tm1.tm_min == tm2.tm_min && tm1.tm_hour == tm2.tm_hour && tm1.tm_mday == tm2.tm_mday && tm1.tm_mon == tm2.tm_mon && tm1.tm_year == tm2.tm_year && tm1.tm_isdst == tm2.tm_isdst
-  );
+  return (tm1.tm_sec == tm2.tm_sec && tm1.tm_min == tm2.tm_min && tm1.tm_hour == tm2.tm_hour && tm1.tm_mday == tm2.tm_mday && tm1.tm_mon == tm2.tm_mon && tm1.tm_year == tm2.tm_year && tm1.tm_isdst == tm2.tm_isdst);
 }
 
 inline bool operator!=(const std::tm& tm1, const std::tm& tm2)

@@ -81,7 +81,6 @@ static int lnext(lua_State* L)
 
   if (type == 0) {
     auto sequence = u.sequence[type].fetch_add(1);
-    ;
     assert(u.serverid != 0 && u.boottimes != 0 && u.channel != 0);
     if (sequence > UID_SEQUENCE_MAX) {
       return luaL_error(L, "sequence out off limit");
